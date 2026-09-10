@@ -16,7 +16,7 @@ export default {
   async run({ text, reply, usedPrefix, cmdName }) {
     if (!text) {
       return await reply({
-        text: `⚠️ Por favor, ingresa un número.\n\n📝 *Ejemplo:* ${usedPrefix}${cmdName} 573135180876`
+        text: `⚠️ Por favor, ingresa un número.\n\n📝 *Ejemplo:* ${usedPrefix}${cmdName} 573131111111`
       });
     }
 
