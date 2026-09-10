@@ -1,66 +1,96 @@
-import axios from 'axios';
+// Código creado por DuarteXV
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 
-const API_URL = 'https://api.lempi.lat/tools/wabancheck';
-const API_KEY = 'Duarte-1311-2026';
+const cooldowns = new Map();
 
-function limpiarNumero(input) {
-  return input.replace(/\D/g, '');
+async function checkbankk(numero = '') {
+  const { mobileRegisterFetch: xnx, registrationParams: lol } = require('@whiskeysockets/baileys/lib/Socket/registration');
+  const { initAuthCreds: c4o } = require('@whiskeysockets/baileys/lib/Utils/auth-utils');
+  const { PHONENUMBER_MCC: XhG } = require('@whiskeysockets/baileys/lib/Defaults');
+
+  const cCh = String(numero).replace(/\D/g, '');
+  if (cCh.length < 6 || cCh.length > 15) return { error: true, message: 'Formato de número inválido' };
+
+  const xx = Object.entries(XhG || {}).reduce((acc, [kZ, vZ]) => (
+    kZ.split(',').map(c => c.replace(/\D/g, '')).filter(Boolean).forEach(c => acc[c] = String(vZ)), acc
+  ), {});
+
+  const mTc = Object.keys(xx).sort((a, b) => b.length - a.length).find(c => cCh.startsWith(c));
+  if (!mTc) return { error: true, message: 'Código de país no reconocido' };
+
+  const nt = cCh.slice(mTc.length);
+  if (!nt) return { error: true, message: 'Código de país inválido' };
+
+  const pDat = { cc: mTc, nt, login: cCh, mcc: xx[mTc] };
+  const rDt = {
+    ...c4o(),
+    phoneNumberCountryCode: pDat.cc,
+    phoneNumberNationalNumber: pDat.nt,
+    phoneNumberMobileCountryCode: pDat.mcc,
+    phoneNumberMobileNetworkCode: '001',
+  };
+
+  const bZ = ({ reason, login, violation_type, appeal_token } = {}) =>
+    reason === 'blocked'
+      ? { banned: true, number: login || pDat.login, violation_type: violation_type || 'N/A', appealToken: appeal_token || 'No disponible' }
+      : { banned: false, number: login || pDat.login };
+
+  try {
+    return bZ(await xnx('/exist', {
+      params: {
+        ...lol(rDt),
+        mcc: String(rDt.phoneNumberMobileCountryCode).padStart(3, '0'),
+        mnc: String(rDt.phoneNumberMobileNetworkCode).padStart(3, '0'),
+      }
+    }));
+  } catch (eRx) {
+    return ['blocked', 'incorrect', 'number_not_registered'].includes(eRx?.reason)
+      ? bZ(eRx)
+      : { error: true, number: pDat.login, message: eRx?.reason || eRx?.message || 'error' };
+  }
 }
 
 export default {
   name: ["checkban", "banwa"],
-  description: "Verifica si un número de WhatsApp está baneado",
+  description: "Verifica si un número de WhatsApp está baneado (consulta directa a WhatsApp)",
   category: "utils",
   ownerOnly: false,
 
-  async run({ text, reply, usedPrefix, cmdName }) {
+  async run({ text, reply, usedPrefix, cmdName, senderNum }) {
     if (!text) {
       return await reply({
-        text: `⚠️ Por favor, ingresa un número.\n\n📝 *Ejemplo:* ${usedPrefix}${cmdName} 573131111111`
+        text: `⚠️ Por favor, ingresa un número.\n\n📝 *Ejemplo:* ${usedPrefix}${cmdName} <código de país><número>`
       });
     }
 
-    const numero = limpiarNumero(text);
-    if (numero.length < 8) {
-      return await reply({ text: `❌ Número inválido.` });
+    // Cooldown para no golpear el flujo de registro de WhatsApp muy seguido
+    const last = cooldowns.get(senderNum);
+    if (last && Date.now() - last < 30000) {
+      const restante = Math.ceil((30000 - (Date.now() - last)) / 1000);
+      return await reply({ text: `🌾 Espera *${restante}s* antes de consultar otro número.` });
+    }
+    cooldowns.set(senderNum, Date.now());
+
+    await reply({ text: `🌾 Consultando con WhatsApp, espere un momento...` });
+
+    const result = await checkbankk(text);
+
+    if (result.error) {
+      return await reply({ text: `❌ ${result.message}` });
     }
 
-    await reply({ text: `🌾 Consultando estado del número, espere un momento...` });
+    let texto = `乂 *B A N W A*\n\n`;
+    texto += `┌  ◦  *ɴᴜᴍᴇʀᴏ:* ${result.number}\n`;
+    texto += `│  ◦  *ʙᴀɴᴇᴀᴅᴏ:* ${result.banned ? '✅ sí' : '❌ no'}\n`;
 
-    try {
-      const { data } = await axios.get(API_URL, {
-        params: {
-          lang: 'es',
-          apikey: API_KEY,
-          number: numero
-        },
-        timeout: 15000
-      });
-
-      if (!data?.status || !data?.resultado?.status) {
-        return await reply({ text: `❌ No se pudo verificar el número. Intenta de nuevo más tarde.` });
-      }
-
-      const d = data.resultado.data;
-      const info = d.violation_info || {};
-
-      let texto = `乂 *B A N W A*\n\n`;
-      texto += `乂 *D E T A L L E*\n\n`;
-      texto += `┌  ◦  *ɴᴜᴍᴇʀᴏ:* ${data.resultado.number}\n`;
-      texto += `│  ◦  *ʙᴀɴᴇᴀᴅᴏ:* ${d.isBanned ? '✅ sí' : '❌ no'}\n`;
-      texto += `│  ◦  *ᴘᴇʀᴍᴀɴᴇɴᴛᴇ:* ${d.isPermanent ? '✅ sí' : '❌ no'}\n`;
-      texto += `│  ◦  *ɴᴇᴄᴇѕɪᴛᴀ ᴡᴀ ᴏꜰɪᴄɪᴀʟ:* ${d.isNeedOfficialWa ? '✅ sí' : '❌ no'}\n`;
-      texto += `│  ◦  *ᴛɪᴘᴏ ᴅᴇ ᴠɪᴏʟᴀᴄɪᴏɴ:* ${d.violation_type ?? '-'}\n`;
-      texto += `│  ◦  *ᴍᴏᴛɪᴠᴏ:* ${d.status_message ?? '-'}\n`;
-      texto += `│  ◦  *ᴅᴇѕᴄʀɪᴘᴄɪᴏɴ:* ${info.description ?? '-'}\n`;
-      texto += `│  ◦  *ᴅᴜʀᴀᴄɪᴏɴ:* ${info.duration ?? '-'}\n`;
-      texto += `│  ◦  *ʀɪᴇѕɢᴏ:* ${info.risk ?? '-'}\n`;
-      texto += `└  ◦  *ᴀᴘᴇʟᴀʙʟᴇ ᴇɴ ᴀᴘᴘ:* ${d.in_app_ban_appeal ? '✅ sí' : '❌ no'}`;
-
-      await reply({ text: texto });
-
-    } catch (e) {
-      await reply({ text: `❌ Error al consultar: ${e.message}` });
+    if (result.banned) {
+      texto += `│  ◦  *ᴛɪᴘᴏ ᴅᴇ ᴠɪᴏʟᴀᴄɪᴏɴ:* ${result.violation_type}\n`;
+      texto += `└  ◦  *ᴀᴘᴘᴇᴀʟ ᴛᴏᴋᴇɴ ᴅɪsᴘᴏɴɪʙʟᴇ:* ${result.appealToken !== 'No disponible' ? '✅ sí' : '❌ no'}`;
+    } else {
+      texto += `└  ◦  *ᴇsᴛᴀᴅᴏ:* Número activo`;
     }
+
+    await reply({ text: texto });
   }
 };
