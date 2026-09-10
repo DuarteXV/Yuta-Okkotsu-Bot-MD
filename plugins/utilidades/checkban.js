@@ -16,7 +16,7 @@ export default {
   async run({ text, reply, usedPrefix, cmdName }) {
     if (!text) {
       return await reply({
-        text: `⚠️ Por favor, ingresa un número.\n\n📝 *Ejemplo:* ${usedPrefix}${cmdName} 573131180200`
+        text: `⚠️ Por favor, ingresa un número.\n\n📝 *Ejemplo:* ${usedPrefix}${cmdName} 573135180876`
       });
     }
 
@@ -41,13 +41,21 @@ export default {
         return await reply({ text: `❌ No se pudo verificar el número. Intenta de nuevo más tarde.` });
       }
 
-      const { isBanned, isNeedOfficialWa } = data.resultado.data;
+      const d = data.resultado.data;
+      const info = d.violation_info || {};
 
       let texto = `乂 *B A N W A*\n\n`;
       texto += `乂 *D E T A L L E*\n\n`;
       texto += `┌  ◦  *ɴᴜᴍᴇʀᴏ:* ${data.resultado.number}\n`;
-      texto += `│  ◦  *ʙᴀɴᴇᴀᴅᴏ:* ${isBanned ? '✅ sí' : '❌ no'}\n`;
-      texto += `└  ◦  *ɴᴇᴄᴇѕɪᴛᴀ ᴡᴀ ᴏꜰɪᴄɪᴀʟ:* ${isNeedOfficialWa ? '✅ sí' : '❌ no'}`;
+      texto += `│  ◦  *ʙᴀɴᴇᴀᴅᴏ:* ${d.isBanned ? '✅ sí' : '❌ no'}\n`;
+      texto += `│  ◦  *ᴘᴇʀᴍᴀɴᴇɴᴛᴇ:* ${d.isPermanent ? '✅ sí' : '❌ no'}\n`;
+      texto += `│  ◦  *ɴᴇᴄᴇѕɪᴛᴀ ᴡᴀ ᴏꜰɪᴄɪᴀʟ:* ${d.isNeedOfficialWa ? '✅ sí' : '❌ no'}\n`;
+      texto += `│  ◦  *ᴛɪᴘᴏ ᴅᴇ ᴠɪᴏʟᴀᴄɪᴏɴ:* ${d.violation_type ?? '-'}\n`;
+      texto += `│  ◦  *ᴍᴏᴛɪᴠᴏ:* ${d.status_message ?? '-'}\n`;
+      texto += `│  ◦  *ᴅᴇѕᴄʀɪᴘᴄɪᴏɴ:* ${info.description ?? '-'}\n`;
+      texto += `│  ◦  *ᴅᴜʀᴀᴄɪᴏɴ:* ${info.duration ?? '-'}\n`;
+      texto += `│  ◦  *ʀɪᴇѕɢᴏ:* ${info.risk ?? '-'}\n`;
+      texto += `└  ◦  *ᴀᴘᴇʟᴀʙʟᴇ ᴇɴ ᴀᴘᴘ:* ${d.in_app_ban_appeal ? '✅ sí' : '❌ no'}`;
 
       await reply({ text: texto });
 
