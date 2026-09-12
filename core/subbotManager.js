@@ -19,7 +19,7 @@ const SUBBOTS_DIR = "./sessions/subbots";
 if (!fs.existsSync(SUBBOTS_DIR)) fs.mkdirSync(SUBBOTS_DIR, { recursive: true });
 
 export const activeBots = new Map();
-const sockets = new Map(); // antes: workers
+const sockets = new Map();
 let mainSock = null;
 
 const logger = pino({ level: "silent" });
@@ -220,7 +220,6 @@ function handleSockExit(id) {
   }
 }
 
-// Núcleo: lo que antes era subbotWorker.js, ahora corre como función normal
 async function startSubbotConnection(id, sessionDir, phoneNumber = null, onCode = null, _attempt = 0) {
   await mkdir(sessionDir, { recursive: true });
 
@@ -391,7 +390,7 @@ export async function requestSubbotCode(id, phoneNumber, sock, from) {
     }, 15000);
 
     const cleanupTimeout = setTimeout(() => {
-      const bot = db.getBot(id);
+      const bot = activeBots.get(id); // 👈 fix: antes era db.getBot(id)
       if (!bot || bot.status !== "online") {
         log.warn(`[MANAGER] Subbot ${id} nunca se conectó — eliminado`);
         removeSubbot(id);
@@ -407,9 +406,8 @@ export async function requestSubbotCode(id, phoneNumber, sock, from) {
       reject(e);
     });
 
-    // Cuando el subbot conecte tras el pairing, avisar por chat
     const checkOnline = setInterval(() => {
-      const bot = db.getBot(id);
+      const bot = activeBots.get(id); // 👈 fix: antes era db.getBot(id)
       if (bot?.status === "online") {
         clearInterval(checkOnline);
         clearTimeout(cleanupTimeout);
