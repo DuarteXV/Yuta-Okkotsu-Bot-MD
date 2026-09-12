@@ -1,5 +1,5 @@
-import { db } from "../../database/db.js";
 import config from "../../config.js";
+import { activeBots } from "../../core/subbotManager.js";
 import { jidNormalizedUser, isLidUser } from "@whiskeysockets/baileys";
 
 export default {
@@ -25,26 +25,29 @@ export default {
         });
       };
 
-      const mainData = db.getAllBots().find((b) => b.isMain);
-      const numeroPrincipal = mainData ? limpiarNumero(mainData.jid || mainData.id) : null;
+      const mainLive = activeBots.get("main");
+      const principalLive = mainLive?.status === "online" ? mainLive : null;
 
-      const todosLosBots = db.getAllBots().filter((b) => !b.isMain);
+      const subbotsConectados = [...activeBots.values()]
+        .filter((b) => !b.isMain && b.status === "online" && b.jid);
 
-      const subbotsEnGrupo = todosLosBots
+      const subbotsEnGrupo = subbotsConectados
         .map((bot) => {
-          const numero = limpiarNumero(bot.jid || bot.id);
+          const numero = limpiarNumero(bot.jid);
           const target = findTarget(numero, bot.lid);
           return target ? { ...bot, numero, targetJid: jidNormalizedUser(target.id) } : null;
         })
         .filter(Boolean);
 
-      const principalTarget = numeroPrincipal ? findTarget(numeroPrincipal, mainData?.lid) : null;
+      const principalTarget = principalLive
+        ? findTarget(limpiarNumero(principalLive.jid), principalLive.lid)
+        : null;
 
       const participantsMentions = [];
 
       let report = `•.°· ◇ \`ᒪIՏTᗩ ᗪᗴ ᗷOTՏ ᗩᑕTIᐯOՏ\` ◇ ·°.•\n`;
       report += `〔💎〕Principal: ${config.botName}\n`;
-      report += `〔🌀〕Sub-bots totales: ${todosLosBots.length}\n`;
+      report += `〔🌀〕Sub-bots conectados: ${subbotsConectados.length}\n`;
       report += `〔🌱〕En este grupo: ${subbotsEnGrupo.length}\n\n`;
 
       if (principalTarget) {
