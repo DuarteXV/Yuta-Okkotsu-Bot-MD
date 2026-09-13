@@ -209,4 +209,29 @@ export const db = {
   setEco(jid, dataObject) {
     db.setUser(jid, dataObject);
   },
+
+  // 💍 MATRIMONIO
+  getMarriage(jid) {
+    return getUser(jid).partner || null;
+  },
+
+  marry(jid1, jid2) {
+    const marriedAt = new Date().toISOString();
+    db.setUser(jid1, { partner: jid2, marriedAt });
+    db.setUser(jid2, { partner: jid1, marriedAt });
+  },
+
+  divorce(jid) {
+    const partner = db.getMarriage(jid);
+    if (partner) {
+      const partnerUser = getUser(partner);
+      delete partnerUser.partner;
+      delete partnerUser.marriedAt;
+      stmts.updateUser.run(JSON.stringify(partnerUser), partner);
+    }
+    const user = getUser(jid);
+    delete user.partner;
+    delete user.marriedAt;
+    stmts.updateUser.run(JSON.stringify(user), jid);
+  },
 };
