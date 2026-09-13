@@ -12,6 +12,20 @@ function cleanJid(jid = "") {
   return `${userPart}@${domainPart}`;
 }
 
+function labelPorGenero(jid) {
+  const genero = (db.getGenero(jid) || "").toLowerCase();
+  if (genero === "hombre") return "Esposo";
+  if (genero === "mujer") return "Esposa";
+  return "Espos@";
+}
+
+function labelSoltero(jid) {
+  const genero = (db.getGenero(jid) || "").toLowerCase();
+  if (genero === "hombre") return "Soltero";
+  if (genero === "mujer") return "Soltera";
+  return "Solter@";
+}
+
 export default {
   name: ["perfil", "profile"],
   description: "Muestra tu perfil: foto, monedas y XP",
@@ -53,9 +67,10 @@ export default {
 
     const total = eco.bolsillo + eco.banco;
     const mention = `@${target.split("@")[0]}`;
+
     const parejaLine = partner
-      ? `𓂃ෆ˚ 💍 ⍴ᥲrᥱjᥲ: @${partner.split("@")[0]} ˃͈◡˂͈\n`
-      : `𓂃ෆ˚ 💔 ⍴ᥲrᥱjᥲ: 𝖲᥆ᥣ𝗍ᥱr᥆(ᥲ)\n`;
+      ? `𓂃ෆ˚ 💍 ${labelPorGenero(partner)}: @${partner.split("@")[0]} ˃͈◡˂͈\n`
+      : `𓂃ෆ˚ 💔 ⍴ᥲrᥱjᥲ: ${labelSoltero(target)}\n`;
 
     const caption =
       `𓂃ෆ˚ 🍮 ⍴ᥲrᥱ𝖿іᥣ ძᥱ ${mention} ౨ৎ\n\n` +
