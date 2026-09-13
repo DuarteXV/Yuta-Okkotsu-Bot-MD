@@ -25,20 +25,34 @@ export default {
   category: "fun",
 
   async run(ctx) {
-    const { sock, msg, from, sender, reply, resolveLid } = ctx;
+    const { sock, msg, from, sender, reply, resolveLid, groupMeta } = ctx;
     cleanExpired();
 
-    const mentioned = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-    if (mentioned.length === 0) {
+    const contextInfo = msg?.message?.extendedTextMessage?.contextInfo;
+
+    let targetJid = null;
+    if (contextInfo?.mentionedJid?.length > 0) {
+      targetJid = contextInfo.mentionedJid[0];
+    } else if (contextInfo?.participant) {
+      targetJid = contextInfo.participant;
+    }
+
+    if (!targetJid) {
       return reply({
-        text: "💍 Debes mencionar a alguien para aceptar o proponer matrimonio.\n> Ejemplo » *.marry @user*",
+        text: "💍 Debes mencionar a alguien o responder su mensaje para aceptar o proponer matrimonio.\n> Ejemplo » *.marry @user* o responde su mensaje con *.marry*",
       });
     }
 
-    let targetJid = mentioned[0];
+    // Igual que en reacciones.js: si viene como @lid o no es un número limpio, resuelve contra los participantes del grupo
+    if (targetJid.endsWith("@lid") || isNaN(targetJid.split("@")[0])) {
+      const found = groupMeta?.participants?.find((p) => p.id === targetJid || p.lid === targetJid);
+      if (found?.id) targetJid = found.id;
+    }
+
     if (targetJid.endsWith("@lid")) {
       targetJid = await resolveLid(targetJid);
     }
+
     const target = cleanJid(targetJid);
 
     if (target === sender) {
@@ -70,7 +84,7 @@ export default {
     pendingProposals.set(sender, { targetJid: target, at: Date.now() });
 
     return reply({
-      text: `💌 @${sender.split("@")[0]} le ha propuesto matrimonio a @${target.split("@")[0]}.\n> @${target.split("@")[0]}, usa *.marry @${sender.split("@")[0]}* para aceptar (expira en 5 min).`,
+      text: `💌 @${sender.split("@")[0]} le ha propuesto matrimonio a @${target.split("@")[0]}.\n> @${target.split("@")[0]}, usa *.marry @${sender.split("@")[0]}* (o responde este mensaje con *.marry*) para aceptar (expira en 5 min).`,
       mentions: [sender, target],
     });
   },
