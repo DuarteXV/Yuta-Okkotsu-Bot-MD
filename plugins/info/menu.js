@@ -26,7 +26,6 @@ async function getBannerBuffer(url) {
   lastUsedUrl = url
   return bannerCache
 }
-
 const catNombres = {
   "info": "INFO",
   "misc": "MISC",
@@ -37,6 +36,7 @@ const catNombres = {
   "stickers": "STICKERS",
   "sockets": "SOCKETS",
   "ia": "IA",
+  "economy": "ECONOMY",
 }
 
 const catDescripciones = {
@@ -49,6 +49,7 @@ const catDescripciones = {
   "stickers": "ᶜᵒᵐᵃⁿᵈᵒˢ ᵖᵃʳᵃ ᵍᵉˢᵗⁱᵒⁿᵃʳ ˢᵗⁱᶜᵏᵉʳˢ·",
   "sockets": "ᶜᵒᵐᵃⁿᵈᵒˢ ᵖᵃʳᵃ ˢᵘᵇᵇᵒᵗˢ·",
   "ia": "ᶜᵒᵐᵃⁿᵈᵒˢ ᵈᵉ ⁱⁿᵗᵉˡⁱᵍᵉⁿᶜⁱᵃ ᵃʳᵗⁱᶠⁱᶜⁱᵃˡ·",
+  "economy": "ᶜᵒᵐᵃⁿᵈᵒˢ ᵈᵉ ᵉᶜᵒⁿᵒᵐⁱᵃ·",
 }
 
 export default {
