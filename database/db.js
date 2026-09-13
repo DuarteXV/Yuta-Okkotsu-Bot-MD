@@ -30,6 +30,7 @@ const stmts = {
   getUser: db_instance.prepare("SELECT data FROM users WHERE jid = ?"),
   insertUser: db_instance.prepare("INSERT INTO users (jid, data) VALUES (?, ?)"),
   updateUser: db_instance.prepare("UPDATE users SET data = ? WHERE jid = ?"),
+  getAllUsers: db_instance.prepare("SELECT jid, data FROM users"),
 
   getGroup: db_instance.prepare("SELECT data FROM groups WHERE jid = ?"),
   insertGroup: db_instance.prepare("INSERT INTO groups (jid, data) VALUES (?, ?)"),
@@ -94,6 +95,14 @@ export const db = {
     const currentData = getUser(jid);
     const updatedData = { ...currentData, ...dataObject };
     stmts.updateUser.run(JSON.stringify(updatedData), jid);
+  },
+
+  getAllUsers() {
+    const rows = stmts.getAllUsers.all();
+    return rows.map(row => ({
+      jid: row.jid,
+      ...JSON.parse(row.data)
+    }));
   },
 
   setGroup(jid, dataObject) {
@@ -233,5 +242,14 @@ export const db = {
     delete user.partner;
     delete user.marriedAt;
     stmts.updateUser.run(JSON.stringify(user), jid);
+  },
+
+  // 🚻 GÉNERO (hombre / mujer)
+  setGenero(jid, genero) {
+    db.setUser(jid, { genero });
+  },
+
+  getGenero(jid) {
+    return getUser(jid).genero || null;
   },
 };
