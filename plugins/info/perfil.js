@@ -73,7 +73,7 @@ export default {
       : `𓂃ෆ˚ 💔 ⍴ᥲrᥱjᥲ: ${labelSoltero(target)}\n`;
 
     const caption =
-      `𓂃ෆ˚ 🍮 ⍴ᥲrᥱ𝖿іᥣ ძᥱ ${mention} ౨ৎ\n\n` +
+      `𓂃ෆ˚ 🍮 ⍴ᥱr𝖿іᥣ ძᥱ ${mention} ౨ৎ\n\n` +
       `𓂃ෆ˚ 🍮 m᥆ᥒᥱძᥲs ${total} [ᑲ᥆ᥣsіᥣᥣ᥆: ${eco.bolsillo} | ᑲᥲᥒᥴ᥆: ${eco.banco}]\n` +
       `⏤͟͟͞͞  ⚡ ᥒі᥎ᥱᥣ: ${level}\n` +
       parejaLine +
