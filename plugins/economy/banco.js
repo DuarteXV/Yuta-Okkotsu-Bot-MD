@@ -8,10 +8,19 @@ export default {
 
   async run({ sender, cmdName, args, reply, react }) {
     const eco = db.getEco(sender)
-    const cantidad = parseInt(args[0])
+    const disponible = cmdName === 'depositar' ? eco.bolsillo : eco.banco
+
+    let cantidad
+    const arg = (args[0] || '').toLowerCase()
+
+    if (arg === 'all' || arg === 'todo') {
+      cantidad = disponible
+    } else {
+      cantidad = parseInt(args[0])
+    }
 
     if (!cantidad || isNaN(cantidad) || cantidad <= 0) {
-      return await reply({ text: `⚠️ Especifica una cantidad válida.\n\n*Ejemplo:* .${cmdName} 500` })
+      return await reply({ text: `⚠️ Especifica una cantidad válida.\n\n*Ejemplo:* .${cmdName} 500\n*O:* .${cmdName} all` })
     }
 
     if (cmdName === 'depositar') {
