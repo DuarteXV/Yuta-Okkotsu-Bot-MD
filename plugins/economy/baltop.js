@@ -1,5 +1,7 @@
 import { db } from '../../database/db.js'
 
+const POR_PAGINA = 10
+
 export default {
   name: ['baltop', 'ricos'],
   description: 'Top de usuarios con más Fragmentos en el grupo',
@@ -31,24 +33,26 @@ export default {
       return await reply({ text: '📉 Todavía nadie en este grupo tiene Fragmentos registrados.' })
     }
 
-    // Sin límite real: si piden un número, se respeta; si no, top 10 por defecto
-    const cantidad = args[0] && !isNaN(parseInt(args[0]))
-      ? Math.min(parseInt(args[0]), ranked.length)
-      : Math.min(10, ranked.length)
+    const totalPaginas = Math.ceil(ranked.length / POR_PAGINA)
+    const pagina = args[0] && !isNaN(parseInt(args[0]))
+      ? Math.min(Math.max(parseInt(args[0]), 1), totalPaginas)
+      : 1
 
-    const totalGrupo = ranked.reduce((acc, u) => acc + u.total, 0)
-    const paginaActual = ranked.slice(0, cantidad)
+    const inicio = (pagina - 1) * POR_PAGINA
+    const paginaActual = ranked.slice(inicio, inicio + POR_PAGINA)
 
-    const medallas = ['🥇', '🥈', '🥉']
-    const lines = paginaActual.map((u, i) => {
-      const posicion = medallas[i] || `${i + 1}.`
-      return `${posicion} @${u.jid.split('@')[0]} — *${u.total.toLocaleString()}* Fragmentos`
-    })
+    let texto = `「✿」Los usuarios con más *Fragmentos 💰* son:\n\n`
 
-    const texto = `🏆 *Top Fragmentos del grupo*\n` +
-      `💰 *Total en el grupo:* ${totalGrupo.toLocaleString()} Fragmentos\n\n` +
-      lines.join('\n') +
-      (ranked.length > cantidad ? `\n\n> Usa *.baltop ${Math.min(cantidad + 10, ranked.length)}* para ver más` : '')
+    texto += paginaActual.map((u, i) => {
+      const posicionGlobal = inicio + i + 1
+      const nombre = db.getPushName(u.jid) || u.jid.split('@')[0]
+      return `✰ ${posicionGlobal} » *${nombre}*\n\t\t Total→ *${u.total.toLocaleString()} Fragmentos 💰*`
+    }).join('\n\n')
+
+    texto += `\n\n> • Página *${pagina}* de *${totalPaginas}*`
+    if (totalPaginas > 1) {
+      texto += `\n> • Usa *.baltop 2* para la siguiente página`
+    }
 
     const mentions = paginaActual.map(u => u.jid)
 
