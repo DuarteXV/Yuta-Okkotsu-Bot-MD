@@ -2,6 +2,15 @@ import { db } from '../../database/db.js'
 
 const POR_PAGINA = 10
 
+function cleanJid(jid = '') {
+  if (!jid) return ''
+  const atIndex = jid.lastIndexOf('@')
+  if (atIndex === -1) return jid.split(':')[0]
+  const userPart = jid.slice(0, atIndex).split(':')[0]
+  const domainPart = jid.slice(atIndex + 1)
+  return `${userPart}@${domainPart}`
+}
+
 export default {
   name: ['baltop', 'ricos'],
   description: 'Top de usuarios con más Fragmentos en el grupo',
@@ -14,9 +23,11 @@ export default {
       return await reply({ text: '❌ No se pudo leer la lista de miembros del grupo.' })
     }
 
-    const miembrosJids = new Set(
-      groupMeta.participants.map(p => p.id).filter(Boolean)
-    )
+    const miembrosJids = new Set()
+    for (const p of groupMeta.participants) {
+      if (p.id) miembrosJids.add(cleanJid(p.id))
+      if (p.phoneNumber) miembrosJids.add(cleanJid(p.phoneNumber))
+    }
 
     const users = db.getAllUsers()
 
