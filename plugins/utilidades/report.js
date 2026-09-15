@@ -1,3 +1,5 @@
+import { getMainSock } from "../../core/subbotManager.js"
+
 const REPORT_GROUP_ID = "120363427598752084@g.us"
 
 function cleanJid(jid = "") {
@@ -24,7 +26,6 @@ export default {
       })
     }
 
-    // Resolución de LID igual que en .warn
     const participants = groupMeta?.participants || []
     let senderRaw = msg.key.participantAlt || msg.key.participant || `${senderNum}@s.whatsapp.net`
     senderRaw = senderRaw.split(':')[0]
@@ -51,9 +52,12 @@ export default {
 
     textoReporte += `╰━━━━━━━━━━━━━○`
 
+    const mainSock = getMainSock()
+    const senderSock = mainSock || sock // fallback por si el principal no está conectado
+
     try {
       if (quoted?.stanzaId) {
-        await sock.sendMessage(REPORT_GROUP_ID, {
+        await senderSock.sendMessage(REPORT_GROUP_ID, {
           forward: {
             key: {
               remoteJid: from,
@@ -66,7 +70,7 @@ export default {
         })
       }
 
-      await sock.sendMessage(REPORT_GROUP_ID, {
+      await senderSock.sendMessage(REPORT_GROUP_ID, {
         text: textoReporte,
         mentions: [senderJid]
       })
