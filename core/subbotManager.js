@@ -159,6 +159,19 @@ export function registerMainBot(sock, label = "MAIN") {
   }
 }
 
+export function getMainSock() {
+  return mainSock;
+}
+
+export function getAllSockets() {
+  const lista = [];
+  if (mainSock) lista.push(mainSock);
+  for (const entry of sockets.values()) {
+    if (entry?.sock) lista.push(entry.sock);
+  }
+  return lista;
+}
+
 export function updateBotStatus(id, data) {
   const current = activeBots.get(id) || {};
   activeBots.set(id, { ...current, ...data });
@@ -390,7 +403,7 @@ export async function requestSubbotCode(id, phoneNumber, sock, from) {
     }, 15000);
 
     const cleanupTimeout = setTimeout(() => {
-      const bot = activeBots.get(id); // 👈 fix: antes era db.getBot(id)
+      const bot = activeBots.get(id);
       if (!bot || bot.status !== "online") {
         log.warn(`[MANAGER] Subbot ${id} nunca se conectó — eliminado`);
         removeSubbot(id);
@@ -407,7 +420,7 @@ export async function requestSubbotCode(id, phoneNumber, sock, from) {
     });
 
     const checkOnline = setInterval(() => {
-      const bot = activeBots.get(id); // 👈 fix: antes era db.getBot(id)
+      const bot = activeBots.get(id);
       if (bot?.status === "online") {
         clearInterval(checkOnline);
         clearTimeout(cleanupTimeout);
