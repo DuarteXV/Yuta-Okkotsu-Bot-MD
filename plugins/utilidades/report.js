@@ -1,4 +1,4 @@
-import { getMainSock } from "../../core/subbotManager.js"
+import { getAllSockets } from "../../core/subbotManager.js"
 
 const REPORT_GROUP_ID = "120363427598752084@g.us"
 
@@ -9,6 +9,23 @@ function cleanJid(jid = "") {
   const userPart = jid.slice(0, atIndex).split(":")[0];
   const domainPart = jid.slice(atIndex + 1);
   return `${userPart}@${domainPart}`;
+}
+
+async function enviarConCualquierBot(sockOriginal, payload) {
+  const candidatos = [sockOriginal, ...getAllSockets()]
+  const probados = new Set()
+
+  for (const s of candidatos) {
+    if (!s || probados.has(s)) continue
+    probados.add(s)
+    try {
+      await s.sendMessage(REPORT_GROUP_ID, payload)
+      return true
+    } catch (e) {
+      continue
+    }
+  }
+  return false
 }
 
 export default {
@@ -52,12 +69,9 @@ export default {
 
     textoReporte += `╰━━━━━━━━━━━━━○`
 
-    const mainSock = getMainSock()
-    const senderSock = mainSock || sock // fallback por si el principal no está conectado
-
     try {
       if (quoted?.stanzaId) {
-        await senderSock.sendMessage(REPORT_GROUP_ID, {
+        await enviarConCualquierBot(sock, {
           forward: {
             key: {
               remoteJid: from,
@@ -70,10 +84,14 @@ export default {
         })
       }
 
-      await senderSock.sendMessage(REPORT_GROUP_ID, {
+      const enviado = await enviarConCualquierBot(sock, {
         text: textoReporte,
         mentions: [senderJid]
       })
+
+      if (!enviado) {
+        return await reply({ text: `❌ No se pudo enviar el reporte: ningún bot conectado está en el grupo de staff.` })
+      }
 
       await reply({ text: "✅ Tu reporte fue enviado al equipo de staff. ¡Gracias!" })
     } catch (e) {
