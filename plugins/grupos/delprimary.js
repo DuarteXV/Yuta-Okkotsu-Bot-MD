@@ -24,8 +24,7 @@ export default {
       return await reply({
         text:
           `⚠️ *Este grupo no tiene bot primario establecido.*\n\n` +
-          `💡 Usa *.setprimary* para establecer uno.\n\n` +
-          `⚔️ _Yuta Okotsu MD | DuarteXV_`
+          `💡 Usa *.setprimary* para establecer uno.`
       })
     }
 
@@ -49,8 +48,7 @@ export default {
       text:
         `✅ *Bot primario eliminado*\n\n` +
         `🤖 El bot @${primary} ya no es el principal.\n` +
-        `Todos los bots y sub-bots responderán en este grupo ahora.\n\n` +
-        `⚔️ _Yuta Okotsu MD | DuarteXV_`,
+        `Todos los bots y sub-bots responderán en este grupo ahora.`,
       mentions: [primaryJid]
     })
   }
