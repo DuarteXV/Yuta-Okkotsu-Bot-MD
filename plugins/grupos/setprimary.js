@@ -31,20 +31,28 @@ export default {
       quotedSender = parseNum(cleanJid(resolved))
     }
 
-    if (!quotedSender) {
-      const botsActivos = [...activeBots.entries()]
-        .filter(([, bot]) => bot.status === 'online')
+    const botsActivos = [...activeBots.entries()].filter(([, bot]) => bot.status === 'online')
 
+    if (!quotedSender) {
       let texto = `🤖 *¿A qué bot quieres como primario?*\n\n`
       for (const [, bot] of botsActivos) {
         const num = parseNum(cleanJid(bot.jid)) || 'N/A'
         texto += `  ✦ *${bot.label || 'Sub-Bot'}* → @${num}\n`
       }
-      texto += `\n💡 Responde a un mensaje de ese bot y ejecuta *.setprimary* de nuevo.\n\n`
-      texto += `⚔️ _Yuta Okotsu MD | DuarteXV_`
+      texto += `\n💡 Responde a un mensaje de ese bot y ejecuta *.setprimary* de nuevo.`
 
       const mentionJids = botsActivos.map(([, bot]) => cleanJid(bot.jid)).filter(Boolean)
       return await reply({ text: texto, mentions: mentionJids })
+    }
+
+    // Validación: el número mencionado/citado tiene que ser un bot real (main o sub) activo en este bot
+    const esBotValido = botsActivos.some(([, bot]) => parseNum(cleanJid(bot.jid)) === quotedSender)
+
+    if (!esBotValido) {
+      return await reply({
+        text: `⚠️ *Ese número no es un bot activo.*\n\n` +
+          `Solo podés poner como primario a un bot (principal o sub-bot) que esté vinculado y online. Respondé a un mensaje suyo y ejecutá *.setprimary* de nuevo.`
+      })
     }
 
     const whoNum = quotedSender
@@ -62,8 +70,7 @@ export default {
       text:
         `✅ *Bot primario establecido*\n\n` +
         `🤖 @${whoNum} es ahora el bot principal.\n` +
-        `Los demás bots no responderán en este grupo.\n\n` +
-        `⚔️ _Yuta Okotsu MD | DuarteXV_`,
+        `Los demás bots no responderán en este grupo.`,
       mentions: [whoJid]
     })
   }
