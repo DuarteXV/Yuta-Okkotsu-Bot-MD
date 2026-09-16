@@ -17,8 +17,16 @@ export default {
   groupOnly: true,
   adminOnly: true,
 
-  async run({ from, msg, react, reply, resolveLid }) {
+  async run({ from, msg, react, reply, resolveLid, botJid }) {
     const parseNum = (jid) => jid ? jid.split('@')[0] : null
+
+    const primary = db.getPrimary(from)
+    const myNum = parseNum(botJid?.split(':')[0])
+
+    // Si ya hay un primario en el grupo, que solo ese bot procese el comando
+    if (primary && myNum !== primary) {
+      return
+    }
 
     const quoted = msg.message?.extendedTextMessage?.contextInfo || msg.message?.imageMessage?.contextInfo || msg.message?.videoMessage?.contextInfo
 
@@ -34,32 +42,30 @@ export default {
     const botsActivos = [...activeBots.entries()].filter(([, bot]) => bot.status === 'online')
 
     if (!quotedSender) {
-      let texto = `🤖 *¿A qué bot quieres como primario?*\n\n`
+      let texto = `¿A qué bot quieres como primario?\n\n`
       for (const [, bot] of botsActivos) {
         const num = parseNum(cleanJid(bot.jid)) || 'N/A'
         texto += `  ✦ *${bot.label || 'Sub-Bot'}* → @${num}\n`
       }
-      texto += `\n💡 Responde a un mensaje de ese bot y ejecuta *.setprimary* de nuevo.`
+      texto += `\nResponde a un mensaje de ese bot y ejecuta *.setprimary* de nuevo.`
 
       const mentionJids = botsActivos.map(([, bot]) => cleanJid(bot.jid)).filter(Boolean)
       return await reply({ text: texto, mentions: mentionJids })
     }
 
-    // Validación: el número mencionado/citado tiene que ser un bot real (main o sub) activo en este bot
+    // Validación: el número mencionado/citado tiene que ser un bot real (main o sub) activo en esta sesión
     const esBotValido = botsActivos.some(([, bot]) => parseNum(cleanJid(bot.jid)) === quotedSender)
 
     if (!esBotValido) {
       return await reply({
-        text: `⚠️ *Ese número no es un bot activo.*\n\n` +
-          `Solo podés poner como primario a un bot (principal o sub-bot) que esté vinculado y online. Respondé a un mensaje suyo y ejecutá *.setprimary* de nuevo.`
+        text: `Ese número no es un socket de este bot. Solo puedes poner como primario a un bot o sub-bot activo de esta sesión.`
       })
     }
 
     const whoNum = quotedSender
     const whoJid = cleanJid(`${whoNum}@s.whatsapp.net`)
 
-    const current = db.getPrimary(from)
-    if (current === whoNum) {
+    if (primary === whoNum) {
       return;
     }
 
@@ -68,8 +74,8 @@ export default {
     await react('✅')
     await reply({
       text:
-        `✅ *Bot primario establecido*\n\n` +
-        `🤖 @${whoNum} es ahora el bot principal.\n` +
+        `Bot primario establecido\n\n` +
+        `@${whoNum} es ahora el bot principal.\n` +
         `Los demás bots no responderán en este grupo.`,
       mentions: [whoJid]
     })
