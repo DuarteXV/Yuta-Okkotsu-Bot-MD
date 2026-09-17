@@ -8,6 +8,10 @@ import { handleChatXp, handleCommandXp } from "./xp.js";
 const groupCache = new Map();
 const prefixes = Array.isArray(config.prefix) ? config.prefix : [config.prefix];
 
+// Cache de LID de owners/co-owners: se resuelve una sola vez por número,
+// no en cada mensaje. El LID de un número no cambia salvo que reinstale WhatsApp.
+const configuredLidCache = new Map();
+
 export function invalidateGroupCache(groupJid) {
   groupCache.delete(groupJid);
 }
@@ -26,8 +30,6 @@ function cleanJid(jid = "") {
 async function resolveLid(lidJid, groupMeta, sock) {
   if (!lidJid || !lidJid.endsWith("@lid")) return lidJid;
 
-  // Tu fork guarda el LID en "p.id" (no "p.lid"), y el número real -cuando
-  // WhatsApp lo comparte- en "p.phoneNumber".
   const match = groupMeta?.participants?.find((p) => cleanJid(p.id || "") === lidJid);
   if (match?.phoneNumber) {
     return cleanJid(match.phoneNumber);
@@ -46,10 +48,19 @@ async function matchesConfiguredNumber(numberList, senderNum, rawLid, sock) {
 
   if (rawLid && rawLid.endsWith("@lid")) {
     for (const num of numberList) {
-      try {
-        const lid = await sock.signalRepository?.lidMapping?.getLIDForPN(`${num}@s.whatsapp.net`);
-        if (lid && cleanJid(lid) === rawLid) return true;
-      } catch {}
+      let lid = configuredLidCache.get(num);
+
+      if (lid === undefined) {
+        try {
+          const resolved = await sock.signalRepository?.lidMapping?.getLIDForPN(`${num}@s.whatsapp.net`);
+          lid = resolved ? cleanJid(resolved) : null;
+        } catch {
+          lid = null;
+        }
+        configuredLidCache.set(num, lid);
+      }
+
+      if (lid && lid === rawLid) return true;
     }
   }
 
@@ -68,8 +79,6 @@ export async function handleMessage(sock, rawMsg, botLabel = "MAIN", mainBotNum 
     const participantRaw = isGroup ? (msg.key?.participant || msg.participant || "") : "";
     const participantReal = isGroup ? (msg.key?.participantAlt || "") : "";
 
-    // Resolución robusta de sender: no asumimos qué campo trae el LID y cuál el número real,
-    // sino que revisamos cuál de los dos termina en "@lid" y usamos el otro.
     let senderJid;
     if (isGroup) {
       senderJid = participantRaw.endsWith("@lid") && participantReal && !participantReal.endsWith("@lid")
