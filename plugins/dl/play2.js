@@ -3,6 +3,7 @@ import yts from 'yt-search'
 import { AIRich } from '@whiskeysockets/baileys'
 
 const LIMIT_MB = 80
+const LONG_VIDEO_SECONDS = 1200 // si no se conoce el peso, más de 20 min va como documento
 const ID_RE = /(?:youtu\.be\/|v=|shorts\/)([\w-]{11})/
 
 const APIS = [
@@ -48,6 +49,36 @@ const fetchData = async url => {
   return null
 }
 
+// Intenta obtener el peso en bytes de varias formas
+const getSize = async url => {
+  // 1) HEAD
+  try {
+    const head = await axios.head(url, { timeout: 15000, maxRedirects: 5 })
+    const len = Number(head.headers['content-length'])
+    if (len > 0) return len
+  } catch {}
+
+  // 2) GET con Range de 1 byte (el total viene en content-range)
+  try {
+    const res = await axios.get(url, {
+      headers: { Range: 'bytes=0-0' },
+      responseType: 'stream',
+      timeout: 15000,
+      maxRedirects: 5
+    })
+    res.data.destroy()
+    const total = Number(res.headers['content-range']?.match(/\/(\d+)$/)?.[1])
+    if (total > 0) return total
+    const len = Number(res.headers['content-length'])
+    if (len > 1) return len // el servidor ignoró Range y mandó el peso completo
+  } catch {}
+
+  return 0
+}
+
+const cleanFileName = name =>
+  String(name).replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, ' ').trim().slice(0, 100) || 'video'
+
 export default {
   name: ['play2'],
   description: 'Descarga video de YouTube',
@@ -84,24 +115,33 @@ export default {
       }
 
       const mp4 = data.url
-      const title = data.title ?? info?.title ?? 'video'
+      const title = data.title || info?.title || 'video'
 
-      const head = await axios.head(mp4).catch(() => null)
-      const size = Number(head?.headers['content-length']) || 0
+      const size = await getSize(mp4)
       const sizeMB = size / 1024 / 1024
-      const caption = `> ${title} ( ${sizeMB.toFixed(2)} MB )`
+      const sizeLabel = size ? ` ( ${sizeMB.toFixed(2)} MB )` : ''
+      const caption = `> ${title}${sizeLabel}`
 
-      if (sizeMB >= LIMIT_MB) {
+      const asDocument = size
+        ? sizeMB >= LIMIT_MB
+        : (info?.seconds || 0) > LONG_VIDEO_SECONDS
+
+      if (asDocument) {
         rich.addText(caption, { replace: 'media' })
         await rich.sendEdit()
         await sock.sendMessage(
           from,
-          { document: { url: mp4 }, mimetype: 'video/mp4', fileName: `${title}.mp4` },
+          {
+            document: { url: mp4 },
+            mimetype: 'video/mp4',
+            fileName: `${cleanFileName(title)}.mp4`,
+            caption: `> ${title}`
+          },
           { quoted: msg }
         )
       } else {
         rich.addVideo(
-          { url: mp4, file_length: size, duration: info?.seconds, thumbnail },
+          { url: mp4, file_length: size || undefined, duration: info?.seconds, thumbnail },
           { replace: 'media', autoFill: !info }
         )
         rich.addText(caption)
