@@ -1,12 +1,66 @@
 import axios from "axios";
 import yts from "yt-search";
 
-const API_KEY = "Duarte-1311-2026";
+const APIS = [
+  {
+    name: "lempi",
+    timeout: 90000,
+    build: (url) =>
+      `https://api.lempi.lat/dl/yta?apikey=Duarte-1311-2026&url=${encodeURIComponent(url)}`,
+    parse: (data) => {
+      if (!data?.status || !data?.datos?.url) return null;
+      return {
+        title: data.titulo,
+        thumbnail: data.miniatura,
+        url: data.datos.url,
+        calidad: data.datos.calidad,
+        formato: data.datos.extension?.replace(".", ""),
+        fileName: data.datos.archivo,
+      };
+    },
+  },
+  {
+    name: "alyacore",
+    timeout: 60000,
+    build: (url) =>
+      `https://api.alyacore.xyz/dl/ytmp3v2?apikey=Duarte-zz12&url=${encodeURIComponent(url)}`,
+    parse: (data) => {
+      if (!data?.status || !data?.data?.dl) return null;
+      const d = data.data;
+      return {
+        title: d.title,
+        thumbnail: d.thumbnail,
+        url: d.dl,
+        calidad: d.quality,
+        formato: d.format || "mp3",
+        fileName: null,
+      };
+    },
+  },
+];
+
+async function getAudio(ytUrl) {
+  let lastError;
+
+  for (const api of APIS) {
+    try {
+      const res = await axios.get(api.build(ytUrl), { timeout: api.timeout });
+      const audio = api.parse(res.data);
+      if (audio?.url) return audio;
+      lastError = new Error(`${api.name}: respuesta sin URL de audio`);
+    } catch (e) {
+      console.error(`[play] ${api.name} falló:`, e.message);
+      lastError = e;
+    }
+  }
+
+  throw lastError || new Error("no pude obtener el audio");
+}
 
 export default {
   name: ["play", "yta", "ytmp3", "playaudio"],
   description: "Descarga música de YouTube",
-  category: 'dl',
+  category: "dl",
   ownerOnly: false,
 
   async run({ sock, from, msg, text, reply, react }) {
@@ -20,10 +74,7 @@ export default {
       await react("🎧");
 
       const search = await yts(text);
-
-      const yt =
-        search.videos?.[0] ||
-        search.all?.[0];
+      const yt = search.videos?.[0] || search.all?.[0];
 
       if (!yt) {
         return reply({
@@ -31,28 +82,15 @@ export default {
         });
       }
 
-      const api =
-        `https://api.lempi.lat/dl/yta?apikey=${API_KEY}&url=${encodeURIComponent(yt.url)}`;
+      const audio = await getAudio(yt.url);
 
-      const res = await axios.get(api, {
-        timeout: 90000,
-      });
-
-      const data = res.data;
-
-      if (!data?.status || !data?.datos?.url) {
-        return reply({
-          text: "⛧ no pude obtener el audio",
-        });
-      }
-
-      const title = data.titulo;
-      const thumbnail = data.miniatura;
+      const title = audio.title || yt.title;
+      const thumbnail = audio.thumbnail || yt.thumbnail;
       const youtube_url = yt.url;
-      const download_url = data.datos.url;
-      const calidad = data.datos.calidad || "360p";
-      const formato = data.datos.extension?.replace(".", "") || "mp3";
-      const fileName = data.datos.archivo || `${title}.${formato}`;
+      const download_url = audio.url;
+      const calidad = audio.calidad || "128k";
+      const formato = audio.formato || "mp3";
+      const fileName = audio.fileName || `${title}.${formato}`;
 
       const vistas = formatViews(yt.views);
 
@@ -66,7 +104,7 @@ export default {
             `⛧ duración › ${formatDuration(yt.seconds)}\n` +
             `⛧ calidad › ${calidad}\n` +
             `⛧ formato › ${formato}\n` +
-            `⛧ link › ${youtube_url}`
+            `⛧ link › ${youtube_url}`,
         },
         { quoted: msg }
       );
@@ -97,12 +135,9 @@ export default {
       }
 
       await react("✅");
-
     } catch (e) {
       console.error(e);
-
       await react("❌");
-
       await reply({
         text: `⛧ ${e.message}`,
       });
@@ -112,19 +147,9 @@ export default {
 
 function formatViews(views) {
   if (!views) return "No disponible";
-
-  if (views >= 1e9) {
-    return `${(views / 1e9).toFixed(1)}B`;
-  }
-
-  if (views >= 1e6) {
-    return `${(views / 1e6).toFixed(1)}M`;
-  }
-
-  if (views >= 1e3) {
-    return `${(views / 1e3).toFixed(1)}k`;
-  }
-
+  if (views >= 1e9) return `${(views / 1e9).toFixed(1)}B`;
+  if (views >= 1e6) return `${(views / 1e6).toFixed(1)}M`;
+  if (views >= 1e3) return `${(views / 1e3).toFixed(1)}k`;
   return views.toString();
 }
 
@@ -132,15 +157,11 @@ function formatDuration(duration) {
   if (!duration) return "No disponible";
 
   if (typeof duration === "string") {
-    if (duration.includes(":")) {
-      return duration;
-    }
+    if (duration.includes(":")) return duration;
     duration = Number(duration);
   }
 
-  if (isNaN(duration)) {
-    return "No disponible";
-  }
+  if (isNaN(duration)) return "No disponible";
 
   const hours = Math.floor(duration / 3600);
   const minutes = Math.floor((duration % 3600) / 60);
