@@ -3,16 +3,47 @@ import yts from 'yt-search'
 import { AIRich } from '@whiskeysockets/baileys'
 
 const LIMIT_MB = 80
-const API = 'https://api.lempi.lat/dl/ytv'
-const APIKEY = 'Duarte-1311-2026'
 const ID_RE = /(?:youtu\.be\/|v=|shorts\/)([\w-]{11})/
 
+const APIS = [
+  {
+    name: 'lempi',
+    endpoint: 'https://api.lempi.lat/dl/ytv',
+    apikey: 'Duarte-1311-2026',
+    tries: 3,
+    timeout: 30000,
+    parse: data =>
+      data?.status && data?.datos?.url
+        ? { url: data.datos.url, title: data.titulo }
+        : null
+  },
+  {
+    name: 'alyacore',
+    endpoint: 'https://api.alyacore.xyz/dl/ytmp4v2',
+    apikey: 'Duarte-zz12',
+    tries: 2,
+    timeout: 60000,
+    parse: data =>
+      data?.status && data?.data?.dl
+        ? { url: data.data.dl, title: data.data.title }
+        : null
+  }
+]
+
 const fetchData = async url => {
-  for (let i = 0; i < 3; i++) {
-    try {
-      const { data } = await axios.get(API, { params: { url, apikey: APIKEY }, timeout: 30000 })
-      if (data?.status && data?.datos?.url) return data
-    } catch {}
+  for (const api of APIS) {
+    for (let i = 0; i < api.tries; i++) {
+      try {
+        const { data } = await axios.get(api.endpoint, {
+          params: { url, apikey: api.apikey },
+          timeout: api.timeout
+        })
+        const media = api.parse(data)
+        if (media?.url) return media
+      } catch (e) {
+        console.error(`[play2] ${api.name} falló (${i + 1}/${api.tries}):`, e.message)
+      }
+    }
   }
   return null
 }
@@ -52,8 +83,8 @@ export default {
         return react('❌')
       }
 
-      const mp4 = data.datos.url
-      const title = data.titulo ?? info?.title ?? 'video'
+      const mp4 = data.url
+      const title = data.title ?? info?.title ?? 'video'
 
       const head = await axios.head(mp4).catch(() => null)
       const size = Number(head?.headers['content-length']) || 0
