@@ -12,13 +12,12 @@ export async function printBanner() {
   const art = await figletAsync("YUTA", { font: "ANSI Shadow" });
   console.clear();
   console.log("\n" + yuta(art));
-  console.log(chalk.hex("#E040FB").bold("        ⚡  Yuta Okotsu Bot  ⚡"));
+  console.log(chalk.hex("#E040FB").bold("        ⚡  Yuta Okkotsu Bot  ⚡"));
   console.log(chalk.hex("#00E5FF")("        ✦  Jujutsu Kaisen Edition  ✦"));
   console.log(separator);
   console.log(
     chalk.white("        Powered by ") +
-    chalk.hex("#E040FB").bold("DuarteXV") +
-    chalk.white("  |  @whiskeysockets/baileys")
+    chalk.hex("#E040FB").bold("DuarteXV")
   );
   console.log(separator + "\n");
 }
@@ -28,8 +27,6 @@ const tag = {
   ok:    chalk.bgHex("#00C853").white.bold("   OK   "),
   warn:  chalk.bgHex("#FF6F00").white.bold("  WARN  "),
   error: chalk.bgHex("#D50000").white.bold(" ERROR  "),
-  msg:   chalk.bgHex("#00E5FF").black.bold("  MSG   "),
-  cmd:   chalk.bgHex("#E040FB").black.bold("  CMD   "),
   conn:  chalk.bgHex("#1A237E").white.bold("  CONN  "),
   bot:   chalk.bgHex("#263238").white.bold("  BOT   "),
 };
@@ -46,44 +43,18 @@ export const log = {
   conn:  (msg) => console.log(`${chalk.gray(`[${ts()}]`)} ${tag.conn}  ${chalk.cyan(msg)}`),
   bot:   (msg) => console.log(`${chalk.gray(`[${ts()}]`)} ${tag.bot}  ${chalk.hex("#B0BEC5")(msg)}`),
 
-  message({ from, sender, isGroup, groupName, body, isCmd, cmdName, botLabel = "MAIN", msgTypeLabel = "Texto" }) {
-    const chatType = isGroup ? "👥 Grupo  " : "💬 Privado"
-    const numero   = sender.split("@")[0].split(":")[0]
-    const lugar    = isGroup ? groupName : "Chat Privado"
-    const tipo     = isCmd ? "⚡ Comando" : msgTypeLabel
-    const mensaje  = isCmd
-      ? chalk.hex("#E040FB")(`⚡ ${body?.slice(0, 60)}`)
-      : body
-        ? chalk.white(body?.slice(0, 60) + (body?.length > 60 ? "…" : ""))
-        : chalk.gray("(sin texto)")
-
-    console.log(
-      chalk.hex("#7B2FBE")("═".repeat(55)) + "\n" +
-      chalk.bgCyan.black(` ⏰ ${ts()} `) +
-      chalk.hex("#7B2FBE")(" │ ") +
-      chalk.bgHex("#E040FB").white(` 🤖 ${botLabel} `) + "\n" +
-      chalk.hex("#7B2FBE")("─".repeat(55)) + "\n" +
-      chalk.white("📱 Usuario  : ") + chalk.greenBright(`+${numero}`) + "\n" +
-      chalk.white(`${chatType}: `) + chalk.yellowBright(lugar) + "\n" +
-      chalk.white("📝 Tipo     : ") + chalk.blueBright(tipo) + "\n" +
-      chalk.white("💬 Mensaje  : ") + mensaje + "\n" +
-      chalk.hex("#7B2FBE")("─".repeat(55))
-    )
-  },
+  message() {},
 
   cmdExec({ cmdName, sender, success, ms, botLabel = "MAIN" }) {
-    const status = success
-      ? chalk.greenBright("✔ Ejecutado")
-      : chalk.red("✘ Fallido")
+    const numero = sender?.split("@")[0] || sender || "";
+    const estado = success ? chalk.greenBright.bold("EXITOSO") : chalk.red.bold("FALLIDO");
+
     console.log(
-      chalk.gray(`[${ts()}]`) + " " +
-      chalk.bgHex("#263238").white.bold(` ${botLabel} `) + " " +
-      tag.cmd + "  " +
-      chalk.hex("#E040FB").bold(cmdName) + " " +
-      chalk.gray("por") + " " +
-      chalk.cyan(sender) + " " +
-      status + " " +
-      chalk.gray(`(${ms}ms)`)
-    )
+      chalk.hex("#00E5FF")(`▸ ${ts()}`) + chalk.gray("  ·  ") + chalk.hex("#E040FB").bold(botLabel) + "\n" +
+      chalk.white("  Comando  ") + chalk.hex("#7B2FBE").bold(`.${cmdName}`) + "\n" +
+      chalk.white("  Usuario  ") + chalk.greenBright(`+${numero}`) + "\n" +
+      chalk.white("  Estado   ") + estado + chalk.gray(`  ·  ${ms}ms`) + "\n" +
+      chalk.gray("  " + "·".repeat(50))
+    );
   },
 };
