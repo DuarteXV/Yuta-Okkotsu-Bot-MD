@@ -7,7 +7,8 @@ mkdirSync("./database", { recursive: true });
 const db_instance = new Database("./database/yuta.sqlite");
 db_instance.pragma("journal_mode = WAL");
 db_instance.pragma("synchronous = NORMAL");
-db_instance.pragma("wal_autocheckpoint = 1");
+db_instance.pragma("wal_autocheckpoint = 1000");
+db_instance.pragma("busy_timeout = 3000");
 
 db_instance.exec(`
   CREATE TABLE IF NOT EXISTS users (
