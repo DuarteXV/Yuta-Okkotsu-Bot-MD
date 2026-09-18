@@ -3,7 +3,7 @@ import yts from 'yt-search'
 import { AIRich } from '@whiskeysockets/baileys'
 
 const LIMIT_MB = 80
-const LONG_VIDEO_SECONDS = 1200 // si no se conoce el peso, más de 20 min va como documento
+const LONG_VIDEO_SECONDS = 1200 // sin peso conocido, más de 20 min va como documento
 const ID_RE = /(?:youtu\.be\/|v=|shorts\/)([\w-]{11})/
 
 const APIS = [
@@ -49,31 +49,14 @@ const fetchData = async url => {
   return null
 }
 
-// Intenta obtener el peso en bytes de varias formas
+// Un solo HEAD con límite corto: si no responde rápido, se sigue sin peso
 const getSize = async url => {
-  // 1) HEAD
   try {
-    const head = await axios.head(url, { timeout: 15000, maxRedirects: 5 })
-    const len = Number(head.headers['content-length'])
-    if (len > 0) return len
-  } catch {}
-
-  // 2) GET con Range de 1 byte (el total viene en content-range)
-  try {
-    const res = await axios.get(url, {
-      headers: { Range: 'bytes=0-0' },
-      responseType: 'stream',
-      timeout: 15000,
-      maxRedirects: 5
-    })
-    res.data.destroy()
-    const total = Number(res.headers['content-range']?.match(/\/(\d+)$/)?.[1])
-    if (total > 0) return total
-    const len = Number(res.headers['content-length'])
-    if (len > 1) return len // el servidor ignoró Range y mandó el peso completo
-  } catch {}
-
-  return 0
+    const head = await axios.head(url, { timeout: 4000, maxRedirects: 5 })
+    return Number(head.headers['content-length']) || 0
+  } catch {
+    return 0
+  }
 }
 
 const cleanFileName = name =>
