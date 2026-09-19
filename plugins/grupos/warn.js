@@ -56,6 +56,7 @@ export default {
       db.setGroup(from, { ...groupData, warns: currentWarns })
 
       const totalWarns = currentWarns[targetJid].length
+      const willKick = totalWarns >= 3
 
       let texto = `⚠️ *¡USUARIO ADVERTIDO!* ⚠️\n\n`
       texto += `👤 *Usuario:* @${targetNum}\n`
@@ -63,14 +64,34 @@ export default {
       texto += `📝 *Razón:* ${razon}\n`
       texto += `📊 *Advertencias:* ${totalWarns}/3\n\n`
 
-      if (totalWarns >= 3) {
-        texto += `❗ *Nota:* Este usuario ha alcanzado el límite de 3 advertencias.`
+      if (willKick) {
+        texto += `❗ *Este usuario alcanzó el límite de 3 advertencias y será expulsado del grupo.*`
       }
 
       await sock.sendMessage(from, {
         text: texto,
         mentions: [targetJid]
       }, { quoted: msg })
+
+      if (willKick) {
+        try {
+          const botJid = cleanJid(sock.user?.id || "")
+          const botParticipant = participants.find(p => cleanJid(p.id) === botJid)
+          const botIsAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin'
+
+          if (!botIsAdmin) {
+            await reply({ text: `⚠️ No pude expulsar a @${targetNum} porque no tengo permisos de administrador.`, mentions: [targetJid] })
+          } else {
+            await sock.groupParticipantsUpdate(from, [targetJid], 'remove')
+            currentWarns[targetJid] = []
+            db.setGroup(from, { ...groupData, warns: currentWarns })
+            await reply({ text: `👢 @${targetNum} fue expulsado del grupo por acumular 3 advertencias.`, mentions: [targetJid] })
+          }
+        } catch (kickErr) {
+          console.error("Error al expulsar tras 3 warns:", kickErr)
+          await reply({ text: `⚠️ No pude expulsar a @${targetNum} (revisa mis permisos de admin).`, mentions: [targetJid] })
+        }
+      }
 
     } catch (err) {
       console.error("Error en comando warn:", err)
