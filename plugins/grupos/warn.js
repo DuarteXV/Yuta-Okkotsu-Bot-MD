@@ -76,7 +76,13 @@ export default {
       if (willKick) {
         try {
           const botJid = cleanJid(sock.user?.id || "")
-          const botParticipant = participants.find(p => cleanJid(p.id) === botJid)
+          const botLid = sock.user?.lid ? cleanJid(sock.user.lid) : null
+          const botParticipant = participants.find(p =>
+            cleanJid(p.id) === botJid ||
+            (botLid && cleanJid(p.id) === botLid) ||
+            (p.lid && cleanJid(p.lid) === botJid) ||
+            (p.lid && botLid && cleanJid(p.lid) === botLid)
+          )
           const botIsAdmin = botParticipant?.admin === 'admin' || botParticipant?.admin === 'superadmin'
 
           if (!botIsAdmin) {
