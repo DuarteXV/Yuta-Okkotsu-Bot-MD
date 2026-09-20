@@ -1,4 +1,7 @@
 import axios from "axios";
+import ffmpeg from "fluent-ffmpeg";
+import { writeFile, readFile, unlink } from "fs/promises";
+import path from "path";
 
 function decodeHtmlEntities(str) {
   return str
@@ -33,6 +36,29 @@ function validateFacebookUrl(url) {
   return null;
 }
 
+async function fixFaststart(buffer) {
+  const tmpDir = process.env.TMPDIR || "./tmp";
+  const inputPath = path.join(tmpDir, `fb_in_${Date.now()}.mp4`);
+  const outputPath = path.join(tmpDir, `fb_out_${Date.now()}.mp4`);
+
+  await writeFile(inputPath, buffer);
+
+  await new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .outputOptions(["-c copy", "-movflags +faststart"])
+      .save(outputPath)
+      .on("end", resolve)
+      .on("error", reject);
+  });
+
+  const fixedBuffer = await readFile(outputPath);
+
+  await unlink(inputPath).catch(() => {});
+  await unlink(outputPath).catch(() => {});
+
+  return fixedBuffer;
+}
+
 async function downloadFacebookVideo(url) {
   const res = await axios.get("https://api.alyacore.xyz/dl/facebook", {
     params: { url, key: "Duarte-zz12" },
@@ -62,18 +88,6 @@ async function downloadFacebookVideo(url) {
     "Referer": "https://www.facebook.com/"
   };
 
-  // Intento rápido: verifica con HEAD si el link sirve el video directo (sin descargar nada)
-  try {
-    const head = await axios.head(videoUrl, { timeout: 8000, headers });
-    const contentType = head.headers["content-type"] || "";
-    if (contentType.includes("video")) {
-      return { mode: "url", videoUrl };
-    }
-  } catch {
-    // Si el HEAD falla o no confirma video, cae al buffer de todos modos
-  }
-
-  // Fallback: descarga completa con validación
   const videoRes = await axios.get(videoUrl, {
     responseType: "arraybuffer",
     timeout: 30000,
@@ -85,7 +99,10 @@ async function downloadFacebookVideo(url) {
     throw new Error("El enlace no devolvió un video válido (posible bloqueo del CDN o link expirado)");
   }
 
-  return { mode: "buffer", buffer: Buffer.from(videoRes.data) };
+  const rawBuffer = Buffer.from(videoRes.data);
+  const fixedBuffer = await fixFaststart(rawBuffer);
+
+  return { buffer: fixedBuffer };
 }
 
 export default {
@@ -122,9 +139,7 @@ export default {
 
       await sock.sendMessage(
         from,
-        result.mode === "url"
-          ? { video: { url: result.videoUrl }, mimetype: "video/mp4", caption: "Aquí tienes :D" }
-          : { video: result.buffer, mimetype: "video/mp4", caption: "Aquí tienes :D" },
+        { video: result.buffer, mimetype: "video/mp4", caption: "Aquí tienes :D" },
         { quoted: msg }
       );
 
