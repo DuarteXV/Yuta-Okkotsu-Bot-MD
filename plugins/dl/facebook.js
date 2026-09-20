@@ -81,9 +81,11 @@ async function downloadFacebookVideo(url) {
 
   const formatos = data.resultados;
   const mejorFormato =
+    formatos.find(f => f.url?.includes("snapcdn.app") && f.quality?.includes("720p")) ||
+    formatos.find(f => f.url?.includes("snapcdn.app") && f.quality?.includes("360p")) ||
+    formatos.find(f => f.url?.includes("snapcdn.app") && f.url !== "/") ||
     formatos.find(f => f.quality?.includes("1080p") && f.url !== "/") ||
-    formatos.find(f => f.quality?.includes("720p") && f.url !== "/") ||
-    formatos.find(f => f.quality?.includes("540p") && f.url !== "/") ||
+    formatos.find(f => f.quality?.includes("720p") && f.url !== "/" && !f.url?.includes("fbcdn.net")) ||
     formatos.find(f => f.url !== "/");
 
   if (!mejorFormato) {
