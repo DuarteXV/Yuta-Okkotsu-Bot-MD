@@ -36,7 +36,7 @@ function validateFacebookUrl(url) {
   return null;
 }
 
-async function fixFaststart(buffer) {
+async function fixVideo(buffer) {
   const tmpDir = process.env.TMPDIR || "./tmp";
   const inputPath = path.join(tmpDir, `fb_in_${Date.now()}.mp4`);
   const outputPath = path.join(tmpDir, `fb_out_${Date.now()}.mp4`);
@@ -45,7 +45,15 @@ async function fixFaststart(buffer) {
 
   await new Promise((resolve, reject) => {
     ffmpeg(inputPath)
-      .outputOptions(["-c copy", "-movflags +faststart"])
+      .outputOptions([
+        "-c:v libx264",
+        "-preset veryfast",
+        "-crf 28",
+        "-c:a aac",
+        "-b:a 128k",
+        "-movflags +faststart",
+        "-pix_fmt yuv420p"
+      ])
       .save(outputPath)
       .on("end", resolve)
       .on("error", reject);
@@ -100,7 +108,7 @@ async function downloadFacebookVideo(url) {
   }
 
   const rawBuffer = Buffer.from(videoRes.data);
-  const fixedBuffer = await fixFaststart(rawBuffer);
+  const fixedBuffer = await fixVideo(rawBuffer);
 
   return { buffer: fixedBuffer };
 }
