@@ -13,14 +13,13 @@ export default {
         `💡 *${usedPrefix}join https://chat.whatsapp.com/XXXXXX*`
     })
 
-    const link = text.trim()
+    const match = text.trim().match(/chat\.whatsapp\.com\/([A-Za-z0-9]{20,24})/)
 
-    if (!link.includes('chat.whatsapp.com/')) return await reply({
+    if (!match) return await reply({
       text: `❌ El link no es válido.\n\nDebe ser: *https://chat.whatsapp.com/XXXXXX*`
     })
 
-    const code = link.split('chat.whatsapp.com/')[1]?.split(' ')[0]
-    if (!code) return await reply({ text: `❌ No se pudo extraer el código del link.` })
+    const code = match[1]
 
     try {
       await sock.groupAcceptInvite(code)
@@ -28,11 +27,12 @@ export default {
       await reply({
         text:
           `✅ *Bot unido al grupo*\n\n` +
-          `🔗 *Link:* ${link}\n\n` +
+          `🔗 *Link:* ${text.trim()}\n\n` +
           `⚔️ _Yuta Okotsu MD | DuarteXV_`
       })
     } catch (e) {
       await react('❌')
+      console.log(e)
       await reply({ text: `❌ No se pudo unir: ${e.message}` })
     }
   }
