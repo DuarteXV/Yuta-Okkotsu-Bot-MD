@@ -4,7 +4,7 @@ import yts from "yt-search";
 const APIS = [
   {
     name: "lempi",
-    timeout: 90000,
+    timeout: 25000,
     build: (url) =>
       `https://api.lempi.lat/dl/yta?apikey=Duarte-1311-2026&url=${encodeURIComponent(url)}`,
     parse: (data) => {
@@ -21,7 +21,7 @@ const APIS = [
   },
   {
     name: "alyacore",
-    timeout: 60000,
+    timeout: 20000,
     build: (url) =>
       `https://api.alyacore.xyz/dl/ytmp3v2?apikey=Duarte-zz12&url=${encodeURIComponent(url)}`,
     parse: (data) => {
@@ -40,21 +40,26 @@ const APIS = [
 ];
 
 async function getAudio(ytUrl) {
-  let lastError;
-
-  for (const api of APIS) {
+  const intentos = APIS.map(async (api) => {
     try {
       const res = await axios.get(api.build(ytUrl), { timeout: api.timeout });
       const audio = api.parse(res.data);
       if (audio?.url) return { ...audio, apiUsada: api.name };
-      lastError = new Error(`${api.name}: respuesta sin URL de audio`);
+      throw new Error(`${api.name}: respuesta sin URL de audio`);
     } catch (e) {
       console.error(`[play] ${api.name} falló:`, e.message);
-      lastError = e;
+      throw e;
     }
-  }
+  });
 
-  throw lastError || new Error("no pude obtener el audio");
+  // Promise.any: devuelve la primera que resuelva OK.
+  // Si todas fallan, junta los errores de cada una.
+  try {
+    return await Promise.any(intentos);
+  } catch (aggregateError) {
+    const detalle = aggregateError.errors?.map((e) => e.message).join(" | ") || aggregateError.message;
+    throw new Error(`ninguna API respondió: ${detalle}`);
+  }
 }
 
 // Devuelve un Readable stream listo para pasarle a Baileys.
