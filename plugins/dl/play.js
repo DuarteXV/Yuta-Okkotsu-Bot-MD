@@ -43,10 +43,9 @@ const APIS = [
   }
 ]
 
-// Conversión corregida para que WhatsApp acepte el reproductor de audio
-const convertLinkToOpus = async (audioUrl) => {
+const convertLinkToMp3 = async (audioUrl) => {
   const tmpDir = os.tmpdir()
-  const outputPath = path.join(tmpDir, `out_${Date.now()}_${Math.random().toString(36).substring(7)}.opus`)
+  const outputPath = path.join(tmpDir, `out_${Date.now()}_${Math.random().toString(36).substring(7)}.mp3`)
 
   await new Promise((resolve, reject) => {
     ffmpeg(audioUrl)
@@ -57,14 +56,13 @@ const convertLinkToOpus = async (audioUrl) => {
         '-reconnect_delay_max', '5'
       ])
       .outputOptions([
-        '-vn',                   // Desactiva video si la API mandó un contenedor de video
-        '-ac', '2',              // 2 canales de audio (estereo)
-        '-ar', '48000',          // Muestra de audio estándar para Opus
-        '-b:a', '128k',          // Bitrate
-        '-application', 'voip'   // Banderas optimizadas para streaming en WhatsApp
+        '-vn',
+        '-ac', '2',
+        '-ar', '44100',
+        '-b:a', '128k'
       ])
-      .toFormat('ogg')
-      .audioCodec('libopus')
+      .toFormat('mp3')
+      .audioCodec('libmp3lame')
       .on('error', (err) => reject(err))
       .on('end', () => resolve())
       .save(outputPath)
@@ -76,7 +74,6 @@ const convertLinkToOpus = async (audioUrl) => {
 const fetchAndConvert = async (ytUrl) => {
   for (const api of APIS) {
     try {
-      console.log(`[play] Probando API: ${api.name}`)
       const { data } = await axios.get(api.endpoint, {
         params: { url: ytUrl, apikey: api.apikey },
         timeout: api.timeout,
@@ -86,13 +83,9 @@ const fetchAndConvert = async (ytUrl) => {
       })
 
       const media = api.parse(data)
-      if (!media?.url) {
-        console.warn(`[play] ${api.name} no devolvió URL.`)
-        continue
-      }
+      if (!media?.url) continue
 
-      console.log(`[play] URL obtenida de ${api.name}: ${media.url}`)
-      const filePath = await convertLinkToOpus(media.url)
+      const filePath = await convertLinkToMp3(media.url)
       return { filePath, title: media.title }
 
     } catch (e) {
@@ -177,7 +170,7 @@ export default {
       const sizeMB = stats.size / 1024 / 1024
 
       const finalTitle = resDl.title || title
-      const fileName = `${cleanFileName(finalTitle)}.opus`
+      const fileName = `${cleanFileName(finalTitle)}.mp3`
       const isLong = sizeMB >= LIMIT_MB || (info?.seconds || 0) > LONG_AUDIO_SECONDS
 
       await sendImagePromise
@@ -187,7 +180,7 @@ export default {
           from,
           {
             document: { url: tempFilePath },
-            mimetype: 'audio/ogg; codecs=opus',
+            mimetype: 'audio/mpeg',
             fileName,
             caption: '⛧ audio enviado como documento por duración/tamaño'
           },
@@ -198,7 +191,8 @@ export default {
           from,
           {
             audio: { url: tempFilePath },
-            mimetype: 'audio/ogg; codecs=opus',
+            mimetype: 'audio/mp4',
+            fileName: fileName,
             seconds: info?.seconds || 0,
             ptt: false
           },
