@@ -51,7 +51,6 @@ const fetchData = async url => {
   }
 }
 
-// Descarga el audio a Buffer para garantizar que WhatsApp lo procese y reproduzca correctamente
 const getAudioBuffer = async url => {
   const res = await axios.get(url, {
     responseType: 'arraybuffer',
@@ -66,9 +65,9 @@ const cleanFileName = name =>
 
 function formatViews(views) {
   if (!views) return 'No disponible'
-  if (views >= 1_000_000_000) return `${(views / 1_000_000_000).toFixed(1)}B (${views.toLocaleString()})`
-  if (views >= 1_000_000) return `${(views / 1_000_000).toFixed(1)}M (${views.toLocaleString()})`
-  if (views >= 1_000) return `${(views / 1_000).toFixed(1)}k (${views.toLocaleString()})`
+  if (views >= 1_000_000_000) return `${(views / 1_000_000_000).toFixed(1)}B`
+  if (views >= 1_000_000) return `${(views / 1_000_000).toFixed(1)}M`
+  if (views >= 1_000) return `${(views / 1_000).toFixed(1)}k`
   return views.toString()
 }
 
@@ -82,10 +81,10 @@ export default {
     try {
       const query = text || args.join(" ")
       if (!query?.trim()) {
-        return reply({ text: '✧ Ingresa el nombre o link de la canción' })
+        return reply({ text: '⛧ escribe el nombre o link del video' })
       }
 
-      await react('🕒')
+      await react('🎧')
 
       const id = query.match(ID_RE)?.[1]
       let info = null
@@ -100,47 +99,39 @@ export default {
       }
 
       if (!info && !id) {
-        await react('✖️')
-        return reply({ text: '❌ No se encontraron resultados' })
+        await react('❌')
+        return reply({ text: '⛧ no encontré resultados' })
       }
 
       const url = info?.url || `https://www.youtube.com/watch?v=${id}`
-      const title = info?.title || 'YouTube'
-      const duration = info?.timestamp || 'N/A'
-      const ago = info?.ago || 'N/A'
+      const title = info?.title || 'Sin título'
+      const duration = info?.timestamp || 'No disponible'
       const vistas = formatViews(info?.views)
-      const canal = info?.author?.name || 'Desconocido'
       const thumbnail = info?.thumbnail ?? info?.image ?? `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
 
-      // Disparar la petición a las APIs de descarga en segundo plano
       const descargaPromise = fetchData(url)
 
       const captionText = 
-        `📌 *Título:* ${title}\n` +
-        `👤 *Canal:* ${canal}\n` +
-        `⏱️ *Duración:* ${duration}\n` +
-        `👁️ *Vistas:* ${vistas}\n` +
-        `📅 *Subido:* ${ago}\n` +
-        `🔗 *Link:* ${url}\n\n` +
-        `⏳ *Preparando audio...*`
+        `⛧ ${title}\n\n` +
+        `⛧ vistas › ${vistas}\n` +
+        `⛧ duración › ${duration}\n` +
+        `⛧ link › ${url}`
 
-      // Envía la imagen con el diseño/caption
       await sock.sendMessage(from, {
         image: { url: thumbnail },
-        caption: captionText.trim()
+        caption: captionText
       }, { quoted: msg })
 
       const resDl = await descargaPromise
 
       if (!resDl?.url) {
-        await react('✖️')
-        return reply({ text: '❌ No se pudo obtener la descarga desde las APIs.' })
+        await react('❌')
+        return reply({ text: '⛧ no se pudo obtener el audio de las APIs' })
       }
 
       const finalTitle = resDl.title || title
       const fileName = `${cleanFileName(finalTitle)}.mp3`
 
-      // Descargamos el buffer real para evitar audios corruptos / 0:00
       const audioBuffer = await getAudioBuffer(resDl.url)
       const sizeMB = audioBuffer.length / 1024 / 1024
 
@@ -149,22 +140,31 @@ export default {
       if (asDocument) {
         await sock.sendMessage(
           from,
-          { document: audioBuffer, fileName, mimetype: 'audio/mpeg' },
+          {
+            document: audioBuffer,
+            mimetype: 'audio/mpeg',
+            fileName,
+            caption: '⛧ audio enviado como documento por duración/tamaño'
+          },
           { quoted: msg }
         )
       } else {
         await sock.sendMessage(
           from,
-          { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false },
+          {
+            audio: audioBuffer,
+            mimetype: 'audio/mpeg',
+            ptt: false
+          },
           { quoted: msg }
         )
       }
 
-      await react('✔️')
+      await react('✅')
     } catch (e) {
       console.error('[dl:play]', e?.message || e)
-      await react('✖️')
-      await reply({ text: `❌ Error: ${e.message}` })
+      await react('❌')
+      await reply({ text: `⛧ error: ${e.message}` })
     }
   }
 }
