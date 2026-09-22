@@ -4,6 +4,7 @@ import ffmpeg from 'fluent-ffmpeg'
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
+import { Readable } from 'stream'
 
 const LIMIT_MB = 50
 const LONG_AUDIO_SECONDS = 1800
@@ -39,7 +40,7 @@ const fetchData = async url => {
         params: { url, apikey: api.apikey },
         timeout: api.timeout,
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
       })
       const media = api.parse(data)
@@ -51,16 +52,37 @@ const fetchData = async url => {
   return null
 }
 
-const convertToOpusDirect = async (audioUrl) => {
+const convertToOpusDisk = async (audioUrl) => {
   const tmpDir = os.tmpdir()
   const outputPath = path.join(tmpDir, `out_${Date.now()}_${Math.random().toString(36).substring(7)}.opus`)
 
+  // Bajamos la data como buffer para validar que NO sea HTML/JSON de error
+  const response = await axios.get(audioUrl, {
+    responseType: 'arraybuffer',
+    timeout: 60000,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': '*/*'
+    }
+  })
+
+  const buffer = Buffer.from(response.data)
+  
+  // Si la respuesta empieza con "<" (HTML) o "{" (JSON), la API dio error
+  const headerText = buffer.slice(0, 100).toString('utf-8').trim()
+  if (headerText.startsWith('<') || headerText.startsWith('{')) {
+    throw new Error('La API devolvió un enlace protegido o inválido (no es audio).')
+  }
+
+  const inputStream = new Readable()
+  inputStream.push(buffer)
+  inputStream.push(null)
+
   await new Promise((resolve, reject) => {
-    ffmpeg(audioUrl)
+    ffmpeg(inputStream)
       .inputOptions([
-        '-headers', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n',
-        '-analyzeduration', '20000000',
-        '-probesize', '20000000'
+        '-analyzeduration', '10000000',
+        '-probesize', '10000000'
       ])
       .toFormat('ogg')
       .audioCodec('libopus')
@@ -143,7 +165,7 @@ export default {
         return reply({ text: '⛧ no se pudo obtener el audio de las APIs' })
       }
 
-      tempFilePath = await convertToOpusDirect(resDl.url)
+      tempFilePath = await convertToOpusDisk(resDl.url)
       const stats = fs.statSync(tempFilePath)
       const sizeMB = stats.size / 1024 / 1024
 
