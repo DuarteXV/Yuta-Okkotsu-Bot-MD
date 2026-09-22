@@ -3,7 +3,7 @@ import db from "#db"
 import axios from "axios"
 import { gotScraping } from 'got-scraping'
 import { CookieJar } from 'tough-cookie'
-import { getBuffer, buildLinkPreview, fetchSafe as fetch, enviarUrl, STREAM_OPTS, UPLOAD_TIMEOUT_MS } from '#serialize'
+import { buildLinkPreview, STREAM_OPTS, UPLOAD_TIMEOUT_MS } from '#serialize'
 
 const YT_BASE = 'https://www.youtube.com'
 const YT_API = `${YT_BASE}/youtubei/v1/search?prettyPrint=false`
@@ -25,7 +25,6 @@ const ytHttp = gotScraping.extend({
   }
 })
 
-// Configuración de APIs con fallback
 const APIS = [
   {
     name: "lempi",
@@ -68,7 +67,7 @@ async function getAudio(ytUrl) {
       const res = await axios.get(api.build(ytUrl), { timeout: api.timeout })
       const audio = api.parse(res.data)
       if (audio?.url) return { ...audio, apiUsada: api.name }
-      throw new Error(`${api.name}: respuesta sin URL de audio`)
+      throw new Error(`${api.name}: sin URL de audio`)
     } catch (e) {
       console.error(`[play] ${api.name} falló:`, e?.message || e)
       throw e
@@ -208,19 +207,39 @@ function formatViews(views) {
 }
 
 export default {
+  name: "play",
   command: ["play", "mp3", "ytmp3", "ytaudio", "playaudio"],
+  alias: ["mp3", "ytmp3", "ytaudio", "playaudio"],
   category: "downloader",
   dlLimit: 'youtube',
-  run: async ({ msg, sock, args }) => {
+  run: async (ctx) => {
+    // Normalizamos parámetros para soportar ambas estructuras de Handler
+    const sock = ctx.sock || ctx.conn
+    const msg = ctx.msg || ctx.m
+    const chat = ctx.from || msg?.chat || msg?.key?.remoteJid
+    const args = ctx.args || (ctx.text ? ctx.text.trim().split(/ +/) : [])
+    const textQuery = ctx.text || args.join(" ")
+
+    const reply = async (txt) => {
+      if (typeof ctx.reply === 'function') return ctx.reply(txt)
+      if (msg?.reply) return msg.reply(txt)
+      return sock.sendMessage(chat, { text: txt }, { quoted: msg })
+    }
+
+    const react = async (emoji) => {
+      if (typeof ctx.react === 'function') return ctx.react(emoji)
+      if (msg?.react) return msg.react(emoji)
+      return sock.sendMessage(chat, { react: { text: emoji, key: msg.key } })
+    }
+
     try {
-      if (!args[0]) {
-        return msg.reply(t('downloads:youtube.no_query'))
+      if (!textQuery.trim()) {
+        return reply(t('downloads:youtube.no_query'))
       }
 
-      await msg.react('🎧')
+      await react('🎧')
 
-      const text = args.join(" ")
-      const urlMatch = text.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/|v\/))([a-zA-Z0-9_-]{11})/)
+      const urlMatch = textQuery.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/|v\/))([a-zA-Z0-9_-]{11})/)
       const urlDirecta = urlMatch ? `https://www.youtube.com/watch?v=${urlMatch[1]}` : null
 
       let video = null
@@ -235,7 +254,7 @@ export default {
         }
       } else {
         try {
-          const resultados = await ytSearch(text)
+          const resultados = await ytSearch(textQuery)
           video = resultados[0]
         } catch (e) {
           console.error('[dl:play] Búsqueda no disponible:', e?.message || e)
@@ -243,11 +262,10 @@ export default {
       }
 
       if (!video) {
-        await msg.react('✖️')
-        return msg.reply(t('downloads:youtube.no_results'))
+        await react('✖️')
+        return reply(t('downloads:youtube.no_results'))
       }
 
-      // Solicitamos la descarga a las APIs en segundo plano inmediatamente
       const descargaPromise = getAudio(video.url)
 
       const title = video.title || 'YouTube'
@@ -270,25 +288,22 @@ export default {
         ? await buildLinkPreview(sock, image, title || global.botname, global.dev, video.url)
         : undefined
 
-      await sock.sendMessage(msg.chat, {
+      await sock.sendMessage(chat, {
         text: infoMessage.trim(),
         linkPreview,
         contextInfo: { mentionedJid: [] }
       }, { quoted: msg })
 
-      // Obtenemos los datos de la API que respondió primero
       const resDl = await descargaPromise
       const finalTitle = resDl.title || title
       const fileName = resDl.fileName || `${finalTitle}.${resDl.formato || 'mp3'}`
       
-      // Creamos el stream asegurando su validez
       const stream = await getAudioStream(resDl.url)
-
       const esAudioLargo = video.seconds > 1800
 
       if (esAudioLargo) {
         await sock.sendMessage(
-          msg.chat,
+          chat,
           {
             document: { stream },
             fileName,
@@ -298,7 +313,7 @@ export default {
         )
       } else {
         await sock.sendMessage(
-          msg.chat,
+          chat,
           {
             audio: { stream },
             mimetype: 'audio/mpeg',
@@ -308,11 +323,11 @@ export default {
         )
       }
 
-      await msg.react('✔️')
+      await react('✔️')
     } catch (e) {
       console.error('[dl:play]', e?.message || e)
-      await msg.react('✖️')
-      await msg.reply(global.msgglobal || e.message)
+      await react('✖️')
+      await reply(global.msgglobal || e.message)
     }
   }
 }
