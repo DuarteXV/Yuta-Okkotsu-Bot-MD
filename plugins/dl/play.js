@@ -39,7 +39,7 @@ const fetchData = async url => {
         params: { url, apikey: api.apikey },
         timeout: api.timeout,
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
       })
       const media = api.parse(data)
@@ -51,36 +51,16 @@ const fetchData = async url => {
   return null
 }
 
-const convertToOpusDisk = async (audioUrl) => {
+const convertToOpusDirect = async (audioUrl) => {
   const tmpDir = os.tmpdir()
-  const idRandom = `${Date.now()}_${Math.random().toString(36).substring(7)}`
-  const inputPath = path.join(tmpDir, `in_${idRandom}.tmp`)
-  const outputPath = path.join(tmpDir, `out_${idRandom}.opus`)
-
-  const response = await axios({
-    method: 'get',
-    url: audioUrl,
-    responseType: 'stream',
-    timeout: 60000,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': '*/*'
-    }
-  })
-
-  const writer = fs.createWriteStream(inputPath)
-  response.data.pipe(writer)
+  const outputPath = path.join(tmpDir, `out_${Date.now()}_${Math.random().toString(36).substring(7)}.opus`)
 
   await new Promise((resolve, reject) => {
-    writer.on('finish', resolve)
-    writer.on('error', reject)
-  })
-
-  await new Promise((resolve, reject) => {
-    ffmpeg(inputPath)
+    ffmpeg(audioUrl)
       .inputOptions([
-        '-analyzeduration 10000000',
-        '-probesize 10000000'
+        '-headers', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n',
+        '-analyzeduration', '20000000',
+        '-probesize', '20000000'
       ])
       .toFormat('ogg')
       .audioCodec('libopus')
@@ -90,10 +70,6 @@ const convertToOpusDisk = async (audioUrl) => {
       .on('end', () => resolve())
       .save(outputPath)
   })
-
-  if (fs.existsSync(inputPath)) {
-    fs.unlinkSync(inputPath)
-  }
 
   return outputPath
 }
@@ -167,7 +143,7 @@ export default {
         return reply({ text: '⛧ no se pudo obtener el audio de las APIs' })
       }
 
-      tempFilePath = await convertToOpusDisk(resDl.url)
+      tempFilePath = await convertToOpusDirect(resDl.url)
       const stats = fs.statSync(tempFilePath)
       const sizeMB = stats.size / 1024 / 1024
 
