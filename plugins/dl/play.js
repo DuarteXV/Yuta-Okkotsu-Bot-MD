@@ -1,5 +1,7 @@
 import axios from 'axios'
 import yts from 'yt-search'
+import ffmpeg from 'fluent-ffmpeg'
+import { Readable } from 'stream'
 
 const LIMIT_MB = 50
 const LONG_AUDIO_SECONDS = 1800
@@ -51,26 +53,29 @@ const fetchData = async url => {
   }
 }
 
-const getAudioData = async url => {
+const convertToOpus = async (url) => {
   const res = await axios.get(url, {
     responseType: 'arraybuffer',
     timeout: 60000,
     headers: { 'User-Agent': 'Mozilla/5.0' }
   })
-  
-  const contentType = res.headers['content-type'] || ''
-  let mimetype = 'audio/mpeg'
-  
-  if (contentType.includes('mp4') || contentType.includes('m4a')) {
-    mimetype = 'audio/mp4'
-  } else if (contentType.includes('ogg')) {
-    mimetype = 'audio/ogg; codecs=opus'
-  }
 
-  return {
-    buffer: Buffer.from(res.data),
-    mimetype
-  }
+  const inputStream = new Readable()
+  inputStream.push(Buffer.from(res.data))
+  inputStream.push(null)
+
+  return new Promise((resolve, reject) => {
+    const chunks = []
+    ffmpeg(inputStream)
+      .toFormat('ogg')
+      .audioCodec('libopus')
+      .audioChannels(2)
+      .audioBitrate('128k')
+      .on('error', (err) => reject(err))
+      .pipe()
+      .on('data', (chunk) => chunks.push(chunk))
+      .on('end', () => resolve(Buffer.concat(chunks)))
+  })
 }
 
 const cleanFileName = name =>
@@ -142,9 +147,9 @@ export default {
         return reply({ text: '⛧ no se pudo obtener el audio de las APIs' })
       }
 
-      const { buffer: audioBuffer, mimetype } = await getAudioData(resDl.url)
+      const audioBuffer = await convertToOpus(resDl.url)
       const finalTitle = resDl.title || title
-      const fileName = `${cleanFileName(finalTitle)}.mp3`
+      const fileName = `${cleanFileName(finalTitle)}.opus`
       const sizeMB = audioBuffer.length / 1024 / 1024
 
       const asDocument = sizeMB >= LIMIT_MB || (info?.seconds || 0) > LONG_AUDIO_SECONDS
@@ -154,7 +159,7 @@ export default {
           from,
           {
             document: audioBuffer,
-            mimetype,
+            mimetype: 'audio/ogg; codecs=opus',
             fileName,
             caption: '⛧ audio enviado como documento por duración/tamaño'
           },
@@ -165,7 +170,7 @@ export default {
           from,
           {
             audio: audioBuffer,
-            mimetype,
+            mimetype: 'audio/ogg; codecs=opus',
             seconds: info?.seconds || 0,
             ptt: false
           },
