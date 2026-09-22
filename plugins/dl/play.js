@@ -1,7 +1,9 @@
 import axios from 'axios'
 import yts from 'yt-search'
 import ffmpeg from 'fluent-ffmpeg'
-import { Readable } from 'stream'
+import fs from 'fs'
+import path from 'path'
+import os from 'os'
 
 const LIMIT_MB = 50
 const LONG_AUDIO_SECONDS = 1800
@@ -53,29 +55,43 @@ const fetchData = async url => {
   }
 }
 
-const convertToOpus = async (url) => {
-  const res = await axios.get(url, {
-    responseType: 'arraybuffer',
+const convertToOpusTemp = async (url) => {
+  const tmpDir = os.tmpdir()
+  const inputPath = path.join(tmpDir, `input_${Date.now()}_${Math.random().toString(36).substring(7)}.tmp`)
+  const outputPath = path.join(tmpDir, `output_${Date.now()}_${Math.random().toString(36).substring(7)}.opus`)
+
+  const response = await axios({
+    method: 'get',
+    url,
+    responseType: 'stream',
     timeout: 60000,
     headers: { 'User-Agent': 'Mozilla/5.0' }
   })
 
-  const inputStream = new Readable()
-  inputStream.push(Buffer.from(res.data))
-  inputStream.push(null)
+  const writer = fs.createWriteStream(inputPath)
+  response.data.pipe(writer)
 
-  return new Promise((resolve, reject) => {
-    const chunks = []
-    ffmpeg(inputStream)
+  await new Promise((resolve, reject) => {
+    writer.on('finish', resolve)
+    writer.on('error', reject)
+  })
+
+  await new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
       .toFormat('ogg')
       .audioCodec('libopus')
       .audioChannels(2)
       .audioBitrate('128k')
       .on('error', (err) => reject(err))
-      .pipe()
-      .on('data', (chunk) => chunks.push(chunk))
-      .on('end', () => resolve(Buffer.concat(chunks)))
+      .on('end', () => resolve())
+      .save(outputPath)
   })
+
+  if (fs.existsSync(inputPath)) {
+    fs.unlinkSync(inputPath)
+  }
+
+  return outputPath
 }
 
 const cleanFileName = name =>
@@ -96,6 +112,8 @@ export default {
   ownerOnly: false,
 
   async run({ sock, from, msg, react, reply, text, args }) {
+    let tempFilePath = null
+
     try {
       const query = text || args.join(" ")
       if (!query?.trim()) {
@@ -127,38 +145,39 @@ export default {
       const vistas = formatViews(info?.views)
       const thumbnail = info?.thumbnail ?? info?.image ?? `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
 
-      const descargaPromise = fetchData(url)
-
       const captionText = 
         `⛧ ${title}\n\n` +
         `⛧ vistas › ${vistas}\n` +
         `⛧ duración › ${duration}\n` +
         `⛧ link › ${url}`
 
-      await sock.sendMessage(from, {
+      const sendImagePromise = sock.sendMessage(from, {
         image: { url: thumbnail },
         caption: captionText
       }, { quoted: msg })
 
-      const resDl = await descargaPromise
+      const resDl = await fetchData(url)
 
       if (!resDl?.url) {
         await react('❌')
         return reply({ text: '⛧ no se pudo obtener el audio de las APIs' })
       }
 
-      const audioBuffer = await convertToOpus(resDl.url)
+      tempFilePath = await convertToOpusTemp(resDl.url)
+      const stats = fs.statSync(tempFilePath)
+      const sizeMB = stats.size / 1024 / 1024
+
       const finalTitle = resDl.title || title
       const fileName = `${cleanFileName(finalTitle)}.opus`
-      const sizeMB = audioBuffer.length / 1024 / 1024
-
       const asDocument = sizeMB >= LIMIT_MB || (info?.seconds || 0) > LONG_AUDIO_SECONDS
+
+      await sendImagePromise
 
       if (asDocument) {
         await sock.sendMessage(
           from,
           {
-            document: audioBuffer,
+            document: { url: tempFilePath },
             mimetype: 'audio/ogg; codecs=opus',
             fileName,
             caption: '⛧ audio enviado como documento por duración/tamaño'
@@ -169,7 +188,7 @@ export default {
         await sock.sendMessage(
           from,
           {
-            audio: audioBuffer,
+            audio: { url: tempFilePath },
             mimetype: 'audio/ogg; codecs=opus',
             seconds: info?.seconds || 0,
             ptt: false
@@ -183,6 +202,10 @@ export default {
       console.error('[dl:play]', e?.message || e)
       await react('❌')
       await reply({ text: `⛧ error: ${e.message}` })
+    } finally {
+      if (tempFilePath && fs.existsSync(tempFilePath)) {
+        fs.unlinkSync(tempFilePath)
+      }
     }
   }
 }
