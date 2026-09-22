@@ -37,10 +37,7 @@ const fetchData = async url => {
     try {
       const { data } = await axios.get(api.endpoint, {
         params: { url, apikey: api.apikey },
-        timeout: api.timeout,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
+        timeout: api.timeout
       })
       const media = api.parse(data)
       if (media?.url) return media
@@ -51,54 +48,25 @@ const fetchData = async url => {
   return null
 }
 
-const convertToOpusDisk = async (audioUrl) => {
+const convertLinkToOpus = async (audioUrl) => {
   const tmpDir = os.tmpdir()
-  const idRandom = `${Date.now()}_${Math.random().toString(36).substring(7)}`
-  const rawPath = path.join(tmpDir, `raw_${idRandom}.tmp`)
-  const outputPath = path.join(tmpDir, `out_${idRandom}.opus`)
-
-  // 1. Descargamos el archivo completo a disco primero
-  const response = await axios({
-    method: 'get',
-    url: audioUrl,
-    responseType: 'stream',
-    timeout: 60000,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': '*/*'
-    }
-  })
-
-  const writer = fs.createWriteStream(rawPath)
-  response.data.pipe(writer)
+  const outputPath = path.join(tmpDir, `out_${Date.now()}_${Math.random().toString(36).substring(7)}.opus`)
 
   await new Promise((resolve, reject) => {
-    writer.on('finish', resolve)
-    writer.on('error', reject)
+    ffmpeg(audioUrl)
+      .inputOptions([
+        '-reconnect', '1',
+        '-reconnect_streamed', '1',
+        '-reconnect_delay_max', '5'
+      ])
+      .toFormat('ogg')
+      .audioCodec('libopus')
+      .audioChannels(2)
+      .audioBitrate('128k')
+      .on('error', (err) => reject(err))
+      .on('end', () => resolve())
+      .save(outputPath)
   })
-
-  // 2. FFmpeg lee directamente el archivo físico creado en disco
-  try {
-    await new Promise((resolve, reject) => {
-      ffmpeg(rawPath)
-        .inputOptions([
-          '-analyzeduration', '20000000',
-          '-probesize', '20000000'
-        ])
-        .toFormat('ogg')
-        .audioCodec('libopus')
-        .audioChannels(2)
-        .audioBitrate('128k')
-        .on('error', (err) => reject(err))
-        .on('end', () => resolve())
-        .save(outputPath)
-    })
-  } finally {
-    // Borramos el archivo temporal sin procesar
-    if (fs.existsSync(rawPath)) {
-      fs.unlinkSync(rawPath)
-    }
-  }
 
   return outputPath
 }
@@ -172,7 +140,9 @@ export default {
         return reply({ text: '⛧ no se pudo obtener el audio de las APIs' })
       }
 
-      tempFilePath = await convertToOpusDisk(resDl.url)
+      // FFmpeg toma directamente el enlace devuelto por la API
+      tempFilePath = await convertLinkToOpus(resDl.url)
+      
       const stats = fs.statSync(tempFilePath)
       const sizeMB = stats.size / 1024 / 1024
 
