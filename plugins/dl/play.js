@@ -33,26 +33,22 @@ const APIS = [
 ]
 
 const fetchData = async url => {
-  const requests = APIS.map(async api => {
+  for (const api of APIS) {
     try {
       const { data } = await axios.get(api.endpoint, {
         params: { url, apikey: api.apikey },
-        timeout: api.timeout
+        timeout: api.timeout,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
       })
       const media = api.parse(data)
       if (media?.url) return media
-      throw new Error(`${api.name}: sin URL`)
     } catch (e) {
       console.error(`[play] ${api.name} falló:`, e.message)
-      throw e
     }
-  })
-
-  try {
-    return await Promise.any(requests)
-  } catch {
-    return null
   }
+  return null
 }
 
 const convertToOpusDisk = async (audioUrl) => {
@@ -66,7 +62,10 @@ const convertToOpusDisk = async (audioUrl) => {
     url: audioUrl,
     responseType: 'stream',
     timeout: 60000,
-    headers: { 'User-Agent': 'Mozilla/5.0' }
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': '*/*'
+    }
   })
 
   const writer = fs.createWriteStream(inputPath)
