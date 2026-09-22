@@ -26,7 +26,6 @@ const APIS = [
     apikey: 'Duarte-zz12',
     timeout: 25000,
     parse: data => {
-      // Revisa las distintas estructuras comunes donde alyacore entrega el enlace directo
       const downloadUrl = data?.data?.dl || data?.data?.url || data?.data?.download || data?.url || data?.dl
       const title = data?.data?.title || data?.title || 'Audio'
       
@@ -37,7 +36,7 @@ const APIS = [
   }
 ]
 
-// Convierte enlace dinámico/stream a Opus
+// Mantener la conversión exacta que ya funciona
 const convertLinkToOpus = async (audioUrl) => {
   const tmpDir = os.tmpdir()
   const outputPath = path.join(tmpDir, `out_${Date.now()}_${Math.random().toString(36).substring(7)}.opus`)
@@ -61,7 +60,7 @@ const convertLinkToOpus = async (audioUrl) => {
   return outputPath
 }
 
-// Recorre las APIs y procesa con la primera que dé un audio convirtible
+// Mantener el fallback iterativo exacto
 const fetchAndConvert = async (ytUrl) => {
   for (const api of APIS) {
     try {
@@ -184,7 +183,9 @@ export default {
           from,
           {
             audio: { url: tempFilePath },
-            mimetype: 'audio/ogg; codecs=opus',
+            // Cambiamos 'audio/ogg; codecs=opus' por 'audio/ogg' para que WhatsApp permita guardar el archivo
+            mimetype: 'audio/ogg',
+            fileName: `${cleanFileName(finalTitle)}.opus`,
             seconds: info?.seconds || 0,
             ptt: false
           },
