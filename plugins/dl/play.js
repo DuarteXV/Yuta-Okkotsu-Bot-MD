@@ -2,7 +2,7 @@ import axios from 'axios'
 import yts from 'yt-search'
 
 const LIMIT_MB = 50
-const LONG_AUDIO_SECONDS = 1800 // 30 minutos
+const LONG_AUDIO_SECONDS = 1800
 const ID_RE = /(?:youtu\.be\/|v=|shorts\/)([\w-]{11})/
 
 const APIS = [
@@ -28,7 +28,6 @@ const APIS = [
   }
 ]
 
-// Consulta las APIs en paralelo para máxima velocidad
 const fetchData = async url => {
   const requests = APIS.map(async api => {
     try {
@@ -52,13 +51,14 @@ const fetchData = async url => {
   }
 }
 
-const getSize = async url => {
-  try {
-    const head = await axios.head(url, { timeout: 3500, maxRedirects: 5 })
-    return Number(head.headers['content-length']) || 0
-  } catch {
-    return 0
-  }
+// Descarga el audio a Buffer para garantizar que WhatsApp lo procese y reproduzca correctamente
+const getAudioBuffer = async url => {
+  const res = await axios.get(url, {
+    responseType: 'arraybuffer',
+    timeout: 60000,
+    headers: { 'User-Agent': 'Mozilla/5.0' }
+  })
+  return Buffer.from(res.data)
 }
 
 const cleanFileName = name =>
@@ -110,11 +110,12 @@ export default {
       const ago = info?.ago || 'N/A'
       const vistas = formatViews(info?.views)
       const canal = info?.author?.name || 'Desconocido'
+      const thumbnail = info?.thumbnail ?? info?.image ?? `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
 
-      // Pide la descarga a las APIs mientras prepara la información
+      // Disparar la petición a las APIs de descarga en segundo plano
       const descargaPromise = fetchData(url)
 
-      const infoMessage = 
+      const captionText = 
         `📌 *Título:* ${title}\n` +
         `👤 *Canal:* ${canal}\n` +
         `⏱️ *Duración:* ${duration}\n` +
@@ -123,7 +124,11 @@ export default {
         `🔗 *Link:* ${url}\n\n` +
         `⏳ *Preparando audio...*`
 
-      await reply({ text: infoMessage.trim() })
+      // Envía la imagen con el diseño/caption
+      await sock.sendMessage(from, {
+        image: { url: thumbnail },
+        caption: captionText.trim()
+      }, { quoted: msg })
 
       const resDl = await descargaPromise
 
@@ -132,27 +137,25 @@ export default {
         return reply({ text: '❌ No se pudo obtener la descarga desde las APIs.' })
       }
 
-      const mp3 = resDl.url
       const finalTitle = resDl.title || title
       const fileName = `${cleanFileName(finalTitle)}.mp3`
 
-      const size = await getSize(mp3)
-      const sizeMB = size / 1024 / 1024
+      // Descargamos el buffer real para evitar audios corruptos / 0:00
+      const audioBuffer = await getAudioBuffer(resDl.url)
+      const sizeMB = audioBuffer.length / 1024 / 1024
 
-      const asDocument = size
-        ? sizeMB >= LIMIT_MB
-        : (info?.seconds || 0) > LONG_AUDIO_SECONDS
+      const asDocument = sizeMB >= LIMIT_MB || (info?.seconds || 0) > LONG_AUDIO_SECONDS
 
       if (asDocument) {
         await sock.sendMessage(
           from,
-          { document: { url: mp3 }, fileName, mimetype: 'audio/mpeg' },
+          { document: audioBuffer, fileName, mimetype: 'audio/mpeg' },
           { quoted: msg }
         )
       } else {
         await sock.sendMessage(
           from,
-          { audio: { url: mp3 }, mimetype: 'audio/mpeg', ptt: false },
+          { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: false },
           { quoted: msg }
         )
       }
