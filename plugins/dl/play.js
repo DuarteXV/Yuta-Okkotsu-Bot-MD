@@ -188,7 +188,9 @@ export default {
       console.error(e);
       await react("❌");
       await reply({
-        text: `⛧ ${e.message}`,
+        text:
+          `⛧ ${e.message}\n\n` +
+          `\`\`\`${e.stack || "sin stack disponible"}\`\`\``,
       });
     }
   },
