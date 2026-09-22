@@ -164,7 +164,7 @@ export default {
         await sock.sendMessage(
           from,
           {
-            document: stream,
+            document: { stream },
             mimetype: "audio/mpeg",
             fileName,
             caption: "⛧ audio enviado como documento por duración/tamaño",
@@ -175,7 +175,7 @@ export default {
         await sock.sendMessage(
           from,
           {
-            audio: stream,
+            audio: { stream },
             mimetype: "audio/mpeg",
             ptt: false,
           },
