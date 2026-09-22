@@ -25,29 +25,19 @@ const APIS = [
     endpoint: 'https://api.alyacore.xyz/dl/ytmp3v2',
     apikey: 'Duarte-zz12',
     timeout: 25000,
-    parse: data =>
-      data?.status && data?.data?.dl
-        ? { url: data.data.dl, title: data.data.title }
+    parse: data => {
+      // Revisa las distintas estructuras comunes donde alyacore entrega el enlace directo
+      const downloadUrl = data?.data?.dl || data?.data?.url || data?.data?.download || data?.url || data?.dl
+      const title = data?.data?.title || data?.title || 'Audio'
+      
+      return data?.status && downloadUrl
+        ? { url: downloadUrl, title }
         : null
+    }
   }
 ]
 
-const fetchData = async url => {
-  for (const api of APIS) {
-    try {
-      const { data } = await axios.get(api.endpoint, {
-        params: { url, apikey: api.apikey },
-        timeout: api.timeout
-      })
-      const media = api.parse(data)
-      if (media?.url) return media
-    } catch (e) {
-      console.error(`[play] ${api.name} falló:`, e.message)
-    }
-  }
-  return null
-}
-
+// Convierte enlace dinámico/stream a Opus
 const convertLinkToOpus = async (audioUrl) => {
   const tmpDir = os.tmpdir()
   const outputPath = path.join(tmpDir, `out_${Date.now()}_${Math.random().toString(36).substring(7)}.opus`)
@@ -69,6 +59,34 @@ const convertLinkToOpus = async (audioUrl) => {
   })
 
   return outputPath
+}
+
+// Recorre las APIs y procesa con la primera que dé un audio convirtible
+const fetchAndConvert = async (ytUrl) => {
+  for (const api of APIS) {
+    try {
+      console.log(`[play] Probando API: ${api.name}`)
+      const { data } = await axios.get(api.endpoint, {
+        params: { url: ytUrl, apikey: api.apikey },
+        timeout: api.timeout
+      })
+
+      const media = api.parse(data)
+      if (!media?.url) {
+        console.warn(`[play] ${api.name} no devolvió una estructura con URL válida.`)
+        continue
+      }
+
+      console.log(`[play] URL obtenida de ${api.name}: ${media.url}`)
+      const filePath = await convertLinkToOpus(media.url)
+      return { filePath, title: media.title }
+
+    } catch (e) {
+      console.error(`[play] Falló la descarga/conversión con ${api.name}:`, e.message)
+    }
+  }
+
+  return null
 }
 
 const cleanFileName = name =>
@@ -133,16 +151,14 @@ export default {
         caption: captionText
       }, { quoted: msg })
 
-      const resDl = await fetchData(url)
+      const resDl = await fetchAndConvert(url)
 
-      if (!resDl?.url) {
+      if (!resDl?.filePath) {
         await react('❌')
-        return reply({ text: '⛧ no se pudo obtener el audio de las APIs' })
+        return reply({ text: '⛧ no se pudo procesar el audio de ninguna API' })
       }
 
-      // FFmpeg toma directamente el enlace devuelto por la API
-      tempFilePath = await convertLinkToOpus(resDl.url)
-      
+      tempFilePath = resDl.filePath
       const stats = fs.statSync(tempFilePath)
       const sizeMB = stats.size / 1024 / 1024
 
