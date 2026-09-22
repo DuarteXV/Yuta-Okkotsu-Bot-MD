@@ -28,7 +28,7 @@ const APIS = [
   }
 ]
 
-// Petición rápida en paralelo
+// Consulta las APIs en paralelo para máxima velocidad
 const fetchData = async url => {
   const requests = APIS.map(async api => {
     try {
@@ -73,19 +73,21 @@ function formatViews(views) {
 }
 
 export default {
-  command: ["play", "mp3", "ytmp3", "ytaudio", "playaudio"],
-  category: "downloader",
-  dlLimit: 'youtube',
-  run: async ({ msg, sock, args }) => {
+  name: "play",
+  description: "Descarga música de YouTube",
+  category: "dl",
+  ownerOnly: false,
+
+  async run({ sock, from, msg, react, reply, text, args }) {
     try {
-      if (!args[0]) {
-        return msg.reply('✧ Ingresa el nombre o link de la canción')
+      const query = text || args.join(" ")
+      if (!query?.trim()) {
+        return reply({ text: '✧ Ingresa el nombre o link de la canción' })
       }
 
-      await msg.react('🕒')
+      await react('🕒')
 
-      const text = args.join(" ")
-      const id = text.match(ID_RE)?.[1]
+      const id = query.match(ID_RE)?.[1]
       let info = null
 
       if (id) {
@@ -93,13 +95,13 @@ export default {
       }
 
       if (!info) {
-        const search = await yts(text).catch(() => null)
+        const search = await yts(query).catch(() => null)
         info = search?.videos?.[0] || search?.all?.[0]
       }
 
       if (!info && !id) {
-        await msg.react('✖️')
-        return msg.reply('❌ No se encontraron resultados')
+        await react('✖️')
+        return reply({ text: '❌ No se encontraron resultados' })
       }
 
       const url = info?.url || `https://www.youtube.com/watch?v=${id}`
@@ -109,7 +111,7 @@ export default {
       const vistas = formatViews(info?.views)
       const canal = info?.author?.name || 'Desconocido'
 
-      // Disparamos la búsqueda de descarga inmediatamente
+      // Pide la descarga a las APIs mientras prepara la información
       const descargaPromise = fetchData(url)
 
       const infoMessage = 
@@ -121,15 +123,13 @@ export default {
         `🔗 *Link:* ${url}\n\n` +
         `⏳ *Preparando audio...*`
 
-      await sock.sendMessage(msg.chat, {
-        text: infoMessage.trim()
-      }, { quoted: msg })
+      await reply({ text: infoMessage.trim() })
 
       const resDl = await descargaPromise
 
       if (!resDl?.url) {
-        await msg.react('✖️')
-        return msg.reply('❌ No se pudo descargar el audio desde las APIs.')
+        await react('✖️')
+        return reply({ text: '❌ No se pudo obtener la descarga desde las APIs.' })
       }
 
       const mp3 = resDl.url
@@ -145,23 +145,23 @@ export default {
 
       if (asDocument) {
         await sock.sendMessage(
-          msg.chat,
+          from,
           { document: { url: mp3 }, fileName, mimetype: 'audio/mpeg' },
           { quoted: msg }
         )
       } else {
         await sock.sendMessage(
-          msg.chat,
+          from,
           { audio: { url: mp3 }, mimetype: 'audio/mpeg', ptt: false },
           { quoted: msg }
         )
       }
 
-      await msg.react('✔️')
+      await react('✔️')
     } catch (e) {
       console.error('[dl:play]', e?.message || e)
-      await msg.react('✖️')
-      await msg.reply(global.msgglobal || e?.message)
+      await react('✖️')
+      await reply({ text: `❌ Error: ${e.message}` })
     }
   }
 }
