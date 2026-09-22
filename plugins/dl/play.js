@@ -54,8 +54,10 @@ const fetchData = async url => {
 const convertToOpusDisk = async (audioUrl) => {
   const tmpDir = os.tmpdir()
   const idRandom = `${Date.now()}_${Math.random().toString(36).substring(7)}`
+  const rawPath = path.join(tmpDir, `raw_${idRandom}.tmp`)
   const outputPath = path.join(tmpDir, `out_${idRandom}.opus`)
 
+  // 1. Descargamos el archivo completo a disco primero
   const response = await axios({
     method: 'get',
     url: audioUrl,
@@ -67,20 +69,36 @@ const convertToOpusDisk = async (audioUrl) => {
     }
   })
 
+  const writer = fs.createWriteStream(rawPath)
+  response.data.pipe(writer)
+
   await new Promise((resolve, reject) => {
-    ffmpeg(response.data)
-      .inputOptions([
-        '-analyzeduration', '10000000',
-        '-probesize', '10000000'
-      ])
-      .toFormat('ogg')
-      .audioCodec('libopus')
-      .audioChannels(2)
-      .audioBitrate('128k')
-      .on('error', (err) => reject(err))
-      .on('end', () => resolve())
-      .save(outputPath)
+    writer.on('finish', resolve)
+    writer.on('error', reject)
   })
+
+  // 2. FFmpeg lee directamente el archivo físico creado en disco
+  try {
+    await new Promise((resolve, reject) => {
+      ffmpeg(rawPath)
+        .inputOptions([
+          '-analyzeduration', '20000000',
+          '-probesize', '20000000'
+        ])
+        .toFormat('ogg')
+        .audioCodec('libopus')
+        .audioChannels(2)
+        .audioBitrate('128k')
+        .on('error', (err) => reject(err))
+        .on('end', () => resolve())
+        .save(outputPath)
+    })
+  } finally {
+    // Borramos el archivo temporal sin procesar
+    if (fs.existsSync(rawPath)) {
+      fs.unlinkSync(rawPath)
+    }
+  }
 
   return outputPath
 }
