@@ -12,20 +12,11 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 
 const APIS = [
   {
-    name: 'lempi',
-    endpoint: 'https://api.lempi.lat/dl/yta',
-    apikey: 'Duarte-1311-2026',
-    timeout: 25000,
-    parse: data =>
-      data?.status && data?.datos?.url
-        ? { url: data.datos.url, title: data.titulo }
-        : null
-  },
-  {
     name: 'alyacore',
     endpoint: 'https://api.alyacore.xyz/dl/ytmp3v2',
     apikey: 'Duarte-zz12',
     timeout: 25000,
+    referer: 'https://api.alyacore.xyz/',
     parse: data => {
       if (!data) return null
       const downloadUrl =
@@ -44,6 +35,37 @@ const APIS = [
   }
 ]
 
+// Antes de mandarle la URL a ffmpeg (que tira errores genéricos tipo
+// "Invalid data found"), pedimos los primeros bytes para ver si
+// realmente es audio o si es un JSON/HTML de error — así el mensaje
+// de fallo dice la causa real en vez de un error opaco de ffmpeg.
+const sniffUrl = async (url, referer) => {
+  try {
+    const res = await axios.get(url, {
+      timeout: 10000,
+      responseType: 'arraybuffer',
+      headers: {
+        'User-Agent': UA,
+        'Range': 'bytes=0-2047',
+        ...(referer ? { Referer: referer } : {})
+      },
+      validateStatus: () => true
+    })
+
+    const contentType = res.headers['content-type'] || 'desconocido'
+    const buf = Buffer.from(res.data)
+    const looksLikeText = buf.slice(0, 1).toString().match(/[{<]/)
+
+    if (res.status >= 400 || looksLikeText || !contentType.match(/audio|octet-stream|video/)) {
+      const preview = buf.slice(0, 200).toString('utf8').replace(/\s+/g, ' ')
+      throw new Error(`HTTP ${res.status}, content-type: ${contentType}, body: "${preview}"`)
+    }
+  } catch (e) {
+    if (e.message.startsWith('HTTP')) throw e
+    throw new Error(`no se pudo verificar el link: ${e.message}`)
+  }
+}
+
 // Consulta las APIs EN PARALELO y devuelve la primera que responda
 // con un link válido, en vez de esperar una por una (eso era lo que
 // hacía más lento el comando cuando la primera API tardaba/fallaba).
@@ -59,7 +81,9 @@ const getDownloadLink = async (ytUrl) => {
       const media = api.parse(data)
       if (!media?.url) throw new Error(`${api.name}: respuesta sin URL de audio (data: ${JSON.stringify(data).slice(0, 200)})`)
 
-      return { ...media, apiUsada: api.name }
+      await sniffUrl(media.url, api.referer)
+
+      return { ...media, apiUsada: api.name, referer: api.referer }
     } catch (e) {
       const detalle = e.response
         ? `HTTP ${e.response.status} - ${JSON.stringify(e.response.data).slice(0, 200)}`
@@ -71,14 +95,17 @@ const getDownloadLink = async (ytUrl) => {
   return Promise.any(intentos)
 }
 
-const convertLinkToMp3 = async (audioUrl) => {
+const convertLinkToMp3 = async (audioUrl, referer) => {
   const tmpDir = os.tmpdir()
   const outputPath = path.join(tmpDir, `out_${Date.now()}_${Math.random().toString(36).substring(7)}.mp3`)
+
+  const headerLines = [`User-Agent: ${UA}`]
+  if (referer) headerLines.push(`Referer: ${referer}`)
 
   await new Promise((resolve, reject) => {
     ffmpeg(audioUrl)
       .inputOptions([
-        '-user_agent', UA,
+        '-headers', headerLines.join('\r\n') + '\r\n',
         '-reconnect', '1',
         '-reconnect_streamed', '1',
         '-reconnect_delay_max', '5'
@@ -109,7 +136,7 @@ const fetchAndConvert = async (ytUrl) => {
   }
 
   try {
-    const filePath = await convertLinkToMp3(media.url)
+    const filePath = await convertLinkToMp3(media.url, media.referer)
     return { filePath, title: media.title, apiUsada: media.apiUsada }
   } catch (e) {
     throw new Error(`la API '${media.apiUsada}' dio un link pero ffmpeg no pudo convertirlo: ${e.message}`)
