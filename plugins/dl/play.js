@@ -72,7 +72,7 @@ export default {
     try {
       const query = text || args.join(" ")
       if (!query?.trim()) {
-        return reply({ text: '⛧ escribe el nombre o link del video' })
+        return reply({ text: 'calc escribe el nombre o link del video' })
       }
 
       await react('🎧')
@@ -91,7 +91,7 @@ export default {
 
       if (!info && !id) {
         await react('❌')
-        return reply({ text: '⛧ no encontré resultados' })
+        return reply({ text: 'calc no encontré resultados' })
       }
 
       const url = info?.url || `https://www.youtube.com/watch?v=${id}`
@@ -101,16 +101,16 @@ export default {
       const thumbnail = info?.thumbnail ?? info?.image ?? `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
 
       const captionText = 
-        `⛧ ${title}\n\n` +
-        `⛧ vistas › ${vistas}\n` +
-        `⛧ duración › ${duration}\n` +
-        `⛧ link › ${url}`
+        `calc ${title}\n\n` +
+        `calc vistas › ${vistas}\n` +
+        `calc duración › ${duration}\n` +
+        `calc link › ${url}`
 
       const resDl = await fetchData(url)
 
       if (!resDl?.url) {
         await react('❌')
-        return reply({ text: '⛧ no se pudo obtener el audio de las APIs' })
+        return reply({ text: 'calc no se pudo obtener el audio de las APIs' })
       }
 
       const finalTitle = resDl.title || title
@@ -127,7 +127,7 @@ export default {
               document: { url: resDl.url },
               mimetype: 'audio/mpeg',
               fileName,
-              caption: '⛧ audio enviado como documento por duración/tamaño'
+              caption: 'calc audio enviado como documento por duración/tamaño'
             }, { quoted: msg })
           : sock.sendMessage(from, {
               audio: { url: resDl.url },
@@ -141,7 +141,7 @@ export default {
     } catch (e) {
       console.error('[dl:play]', e?.message || e)
       await react('❌')
-      await reply({ text: `⛧ error: ${e.message}` })
+      await reply({ text: `calc error: ${e.message}` })
     }
   }
 }
