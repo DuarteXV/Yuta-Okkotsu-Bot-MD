@@ -43,6 +43,7 @@ const APIS = [
   }
 ]
 
+// Conversión corregida para que WhatsApp acepte el reproductor de audio
 const convertLinkToOpus = async (audioUrl) => {
   const tmpDir = os.tmpdir()
   const outputPath = path.join(tmpDir, `out_${Date.now()}_${Math.random().toString(36).substring(7)}.opus`)
@@ -55,10 +56,15 @@ const convertLinkToOpus = async (audioUrl) => {
         '-reconnect_streamed', '1',
         '-reconnect_delay_max', '5'
       ])
+      .outputOptions([
+        '-vn',                   // Desactiva video si la API mandó un contenedor de video
+        '-ac', '2',              // 2 canales de audio (estereo)
+        '-ar', '48000',          // Muestra de audio estándar para Opus
+        '-b:a', '128k',          // Bitrate
+        '-application', 'voip'   // Banderas optimizadas para streaming en WhatsApp
+      ])
       .toFormat('ogg')
       .audioCodec('libopus')
-      .audioChannels(2)
-      .audioBitrate('128k')
       .on('error', (err) => reject(err))
       .on('end', () => resolve())
       .save(outputPath)
@@ -188,7 +194,6 @@ export default {
           { quoted: msg }
         )
       } else {
-        // Se restituye el MIME completo requerido por WhatsApp para reproducir archivos Opus
         await sock.sendMessage(
           from,
           {
