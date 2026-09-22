@@ -8,6 +8,7 @@ import os from 'os'
 const LIMIT_MB = 50
 const LONG_AUDIO_SECONDS = 1800
 const ID_RE = /(?:youtu\.be\/|v=|shorts\/)([\w-]{11})/
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
 const APIS = [
   {
@@ -27,13 +28,13 @@ const APIS = [
     timeout: 25000,
     parse: data => {
       if (!data) return null
-      const downloadUrl = 
-        data?.data?.dl || 
-        data?.data?.url || 
-        data?.data?.download || 
-        data?.result?.url || 
-        data?.result?.dl || 
-        data?.url || 
+      const downloadUrl =
+        data?.data?.dl ||
+        data?.data?.url ||
+        data?.data?.download ||
+        data?.result?.url ||
+        data?.result?.dl ||
+        data?.url ||
         data?.dl
 
       const title = data?.data?.title || data?.result?.title || data?.title || 'Audio'
@@ -43,6 +44,30 @@ const APIS = [
   }
 ]
 
+// Consulta las APIs EN PARALELO y devuelve la primera que responda
+// con un link válido, en vez de esperar una por una (eso era lo que
+// hacía más lento el comando cuando la primera API tardaba/fallaba).
+const getDownloadLink = async (ytUrl) => {
+  const intentos = APIS.map(async (api) => {
+    const { data } = await axios.get(api.endpoint, {
+      params: { url: ytUrl, apikey: api.apikey },
+      timeout: api.timeout,
+      headers: { 'User-Agent': UA }
+    })
+
+    const media = api.parse(data)
+    if (!media?.url) throw new Error(`${api.name}: respuesta sin URL de audio`)
+
+    return { ...media, apiUsada: api.name }
+  })
+
+  try {
+    return await Promise.any(intentos)
+  } catch {
+    return null
+  }
+}
+
 const convertLinkToMp3 = async (audioUrl) => {
   const tmpDir = os.tmpdir()
   const outputPath = path.join(tmpDir, `out_${Date.now()}_${Math.random().toString(36).substring(7)}.mp3`)
@@ -50,7 +75,7 @@ const convertLinkToMp3 = async (audioUrl) => {
   await new Promise((resolve, reject) => {
     ffmpeg(audioUrl)
       .inputOptions([
-        '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        '-user_agent', UA,
         '-reconnect', '1',
         '-reconnect_streamed', '1',
         '-reconnect_delay_max', '5'
@@ -72,28 +97,16 @@ const convertLinkToMp3 = async (audioUrl) => {
 }
 
 const fetchAndConvert = async (ytUrl) => {
-  for (const api of APIS) {
-    try {
-      const { data } = await axios.get(api.endpoint, {
-        params: { url: ytUrl, apikey: api.apikey },
-        timeout: api.timeout,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-      })
+  const media = await getDownloadLink(ytUrl)
+  if (!media?.url) return null
 
-      const media = api.parse(data)
-      if (!media?.url) continue
-
-      const filePath = await convertLinkToMp3(media.url)
-      return { filePath, title: media.title }
-
-    } catch (e) {
-      console.error(`[play] Error en ${api.name}:`, e?.message || e)
-    }
+  try {
+    const filePath = await convertLinkToMp3(media.url)
+    return { filePath, title: media.title, apiUsada: media.apiUsada }
+  } catch (e) {
+    console.error(`[play] conversión falló (${media.apiUsada}):`, e?.message || e)
+    return null
   }
-
-  return null
 }
 
 const cleanFileName = name =>
@@ -147,7 +160,7 @@ export default {
       const vistas = formatViews(info?.views)
       const thumbnail = info?.thumbnail ?? info?.image ?? `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
 
-      const captionText = 
+      const captionText =
         `⛧ ${title}\n\n` +
         `⛧ vistas › ${vistas}\n` +
         `⛧ duración › ${duration}\n` +
