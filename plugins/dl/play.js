@@ -129,10 +129,9 @@ export default {
         return reply({ text: '⛧ no se pudo obtener el audio de las APIs' })
       }
 
+      const audioBuffer = await getAudioBuffer(resDl.url)
       const finalTitle = resDl.title || title
       const fileName = `${cleanFileName(finalTitle)}.mp3`
-
-      const audioBuffer = await getAudioBuffer(resDl.url)
       const sizeMB = audioBuffer.length / 1024 / 1024
 
       const asDocument = sizeMB >= LIMIT_MB || (info?.seconds || 0) > LONG_AUDIO_SECONDS
