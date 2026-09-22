@@ -1,5 +1,9 @@
 import axios from 'axios'
 import yts from 'yt-search'
+import ffmpeg from 'fluent-ffmpeg'
+import fs from 'fs'
+import path from 'path'
+import os from 'os'
 
 const LIMIT_MB = 50
 const LONG_AUDIO_SECONDS = 1800
@@ -51,6 +55,50 @@ const fetchData = async url => {
   }
 }
 
+const convertToOpusDisk = async (audioUrl) => {
+  const tmpDir = os.tmpdir()
+  const idRandom = `${Date.now()}_${Math.random().toString(36).substring(7)}`
+  const inputPath = path.join(tmpDir, `in_${idRandom}.tmp`)
+  const outputPath = path.join(tmpDir, `out_${idRandom}.opus`)
+
+  const response = await axios({
+    method: 'get',
+    url: audioUrl,
+    responseType: 'stream',
+    timeout: 60000,
+    headers: { 'User-Agent': 'Mozilla/5.0' }
+  })
+
+  const writer = fs.createWriteStream(inputPath)
+  response.data.pipe(writer)
+
+  await new Promise((resolve, reject) => {
+    writer.on('finish', resolve)
+    writer.on('error', reject)
+  })
+
+  await new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .inputOptions([
+        '-analyzeduration 10000000',
+        '-probesize 10000000'
+      ])
+      .toFormat('ogg')
+      .audioCodec('libopus')
+      .audioChannels(2)
+      .audioBitrate('128k')
+      .on('error', (err) => reject(err))
+      .on('end', () => resolve())
+      .save(outputPath)
+  })
+
+  if (fs.existsSync(inputPath)) {
+    fs.unlinkSync(inputPath)
+  }
+
+  return outputPath
+}
+
 const cleanFileName = name =>
   String(name).replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, ' ').trim().slice(0, 100) || 'audio'
 
@@ -69,10 +117,12 @@ export default {
   ownerOnly: false,
 
   async run({ sock, from, msg, react, reply, text, args }) {
+    let tempFilePath = null
+
     try {
       const query = text || args.join(" ")
       if (!query?.trim()) {
-        return reply({ text: 'calc escribe el nombre o link del video' })
+        return reply({ text: '⛧ escribe el nombre o link del video' })
       }
 
       await react('🎧')
@@ -91,7 +141,7 @@ export default {
 
       if (!info && !id) {
         await react('❌')
-        return reply({ text: 'calc no encontré resultados' })
+        return reply({ text: '⛧ no encontré resultados' })
       }
 
       const url = info?.url || `https://www.youtube.com/watch?v=${id}`
@@ -101,47 +151,66 @@ export default {
       const thumbnail = info?.thumbnail ?? info?.image ?? `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
 
       const captionText = 
-        `calc ${title}\n\n` +
-        `calc vistas › ${vistas}\n` +
-        `calc duración › ${duration}\n` +
-        `calc link › ${url}`
+        `⛧ ${title}\n\n` +
+        `⛧ vistas › ${vistas}\n` +
+        `⛧ duración › ${duration}\n` +
+        `⛧ link › ${url}`
+
+      const sendImagePromise = sock.sendMessage(from, {
+        image: { url: thumbnail },
+        caption: captionText
+      }, { quoted: msg })
 
       const resDl = await fetchData(url)
 
       if (!resDl?.url) {
         await react('❌')
-        return reply({ text: 'calc no se pudo obtener el audio de las APIs' })
+        return reply({ text: '⛧ no se pudo obtener el audio de las APIs' })
       }
 
-      const finalTitle = resDl.title || title
-      const fileName = `${cleanFileName(finalTitle)}.mp3`
-      const isLong = (info?.seconds || 0) > LONG_AUDIO_SECONDS
+      tempFilePath = await convertToOpusDisk(resDl.url)
+      const stats = fs.statSync(tempFilePath)
+      const sizeMB = stats.size / 1024 / 1024
 
-      await Promise.all([
-        sock.sendMessage(from, {
-          image: { url: thumbnail },
-          caption: captionText
-        }, { quoted: msg }),
-        isLong
-          ? sock.sendMessage(from, {
-              document: { url: resDl.url },
-              mimetype: 'audio/mpeg',
-              fileName,
-              caption: 'calc audio enviado como documento por duración/tamaño'
-            }, { quoted: msg })
-          : sock.sendMessage(from, {
-              audio: { url: resDl.url },
-              mimetype: 'audio/mpeg',
-              seconds: info?.seconds || 0,
-              ptt: false
-            }, { quoted: msg })
-      ])
+      const finalTitle = resDl.title || title
+      const fileName = `${cleanFileName(finalTitle)}.opus`
+      const isLong = sizeMB >= LIMIT_MB || (info?.seconds || 0) > LONG_AUDIO_SECONDS
+
+      await sendImagePromise
+
+      if (isLong) {
+        await sock.sendMessage(
+          from,
+          {
+            document: { url: tempFilePath },
+            mimetype: 'audio/ogg; codecs=opus',
+            fileName,
+            caption: '⛧ audio enviado como documento por duración/tamaño'
+          },
+          { quoted: msg }
+        )
+      } else {
+        await sock.sendMessage(
+          from,
+          {
+            audio: { url: tempFilePath },
+            mimetype: 'audio/ogg; codecs=opus',
+            seconds: info?.seconds || 0,
+            ptt: false
+          },
+          { quoted: msg }
+        )
+      }
 
       await react('✅')
     } catch (e) {
       console.error('[dl:play]', e?.message || e)
       await react('❌')
-      await reply({ text: `calc error: ${e.message}` })
+      await reply({ text: `⛧ error: ${e.message}` })
+    } finally {
+      if (tempFilePath && fs.existsSync(tempFilePath)) {
+        fs.unlinkSync(tempFilePath)
+      }
     }
   }
 }
