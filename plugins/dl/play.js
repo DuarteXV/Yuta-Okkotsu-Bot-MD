@@ -57,6 +57,18 @@ async function getAudio(ytUrl) {
   throw lastError || new Error("no pude obtener el audio");
 }
 
+// Devuelve un Readable stream listo para pasarle a Baileys.
+// Importante: un stream solo se puede consumir una vez, así que si
+// necesitás reenviar (audio + documento), pedí uno nuevo por cada envío.
+async function getAudioStream(url) {
+  const res = await axios.get(url, {
+    responseType: "stream",
+    timeout: 60000,
+    headers: { "User-Agent": "Mozilla/5.0" },
+  });
+  return res.data;
+}
+
 function extractVideoId(text) {
   const patterns = [
     /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/|youtube\.com\/embed\/)([A-Za-z0-9_-]{11})/,
@@ -126,6 +138,10 @@ export default {
 
       const vistas = formatViews(yt.views);
 
+      // Arrancamos a pedir el stream del audio en paralelo mientras
+      // se envía el mensaje del thumbnail, para no perder tiempo.
+      const streamPromise = getAudioStream(download_url);
+
       await sock.sendMessage(
         from,
         {
@@ -142,12 +158,13 @@ export default {
       );
 
       const isLongAudio = yt.seconds > 1800; // 30 minutos
+      const stream = await streamPromise;
 
       if (isLongAudio) {
         await sock.sendMessage(
           from,
           {
-            document: { url: download_url },
+            document: stream,
             mimetype: "audio/mpeg",
             fileName,
             caption: "⛧ audio enviado como documento por duración/tamaño",
@@ -158,7 +175,7 @@ export default {
         await sock.sendMessage(
           from,
           {
-            audio: { url: download_url },
+            audio: stream,
             mimetype: "audio/mpeg",
             ptt: false,
           },
