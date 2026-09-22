@@ -57,6 +57,17 @@ async function getAudio(ytUrl) {
   throw lastError || new Error("no pude obtener el audio");
 }
 
+function extractVideoId(text) {
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/|youtube\.com\/embed\/)([A-Za-z0-9_-]{11})/,
+  ];
+  for (const p of patterns) {
+    const match = text.match(p);
+    if (match) return match[1];
+  }
+  return null;
+}
+
 export default {
   name: ["play", "yta", "ytmp3", "playaudio"],
   description: "Descarga música de YouTube",
@@ -73,18 +84,39 @@ export default {
 
       await react("🎧");
 
-      const search = await yts(text);
-      const yt = search.videos?.[0] || search.all?.[0];
+      const videoId = extractVideoId(text);
+      let yt;
 
-      if (!yt) {
-        return reply({
-          text: "⛧ no encontré resultados",
-        });
+      if (videoId) {
+        // Ya es un link directo: no necesitamos buscar en YouTube, evitamos el 302 de yts
+        yt = {
+          url: `https://www.youtube.com/watch?v=${videoId}`,
+          title: null,
+          thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+          views: null,
+          seconds: null,
+        };
+      } else {
+        try {
+          const search = await yts(text);
+          yt = search.videos?.[0] || search.all?.[0];
+        } catch (e) {
+          console.error("[play] búsqueda yts falló:", e.message);
+          return reply({
+            text: "⛧ no pude buscar en YouTube ahorita, mejor pega el link directo del video",
+          });
+        }
+
+        if (!yt) {
+          return reply({
+            text: "⛧ no encontré resultados",
+          });
+        }
       }
 
       const audio = await getAudio(yt.url);
 
-      const title = audio.title || yt.title;
+      const title = audio.title || yt.title || "Sin título";
       const thumbnail = audio.thumbnail || yt.thumbnail;
       const youtube_url = yt.url;
       const download_url = audio.url;
