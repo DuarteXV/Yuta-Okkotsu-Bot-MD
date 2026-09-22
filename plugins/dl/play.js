@@ -27,7 +27,6 @@ const APIS = [
     timeout: 25000,
     parse: data => {
       if (!data) return null
-      // Busca la URL en todos los posibles esquemas de respuesta de Alyacore
       const downloadUrl = 
         data?.data?.dl || 
         data?.data?.url || 
@@ -82,7 +81,7 @@ const fetchAndConvert = async (ytUrl) => {
 
       const media = api.parse(data)
       if (!media?.url) {
-        console.warn(`[play] ${api.name} no devolvió URL. Respuesta recibida:`, JSON.stringify(data))
+        console.warn(`[play] ${api.name} no devolvió URL.`)
         continue
       }
 
@@ -189,12 +188,12 @@ export default {
           { quoted: msg }
         )
       } else {
+        // Se restituye el MIME completo requerido por WhatsApp para reproducir archivos Opus
         await sock.sendMessage(
           from,
           {
             audio: { url: tempFilePath },
-            mimetype: 'audio/ogg',
-            fileName: `${cleanFileName(finalTitle)}.opus`,
+            mimetype: 'audio/ogg; codecs=opus',
             seconds: info?.seconds || 0,
             ptt: false
           },
