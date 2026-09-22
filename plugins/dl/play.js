@@ -46,7 +46,7 @@ async function getAudio(ytUrl) {
     try {
       const res = await axios.get(api.build(ytUrl), { timeout: api.timeout });
       const audio = api.parse(res.data);
-      if (audio?.url) return audio;
+      if (audio?.url) return { ...audio, apiUsada: api.name };
       lastError = new Error(`${api.name}: respuesta sin URL de audio`);
     } catch (e) {
       console.error(`[play] ${api.name} falló:`, e.message);
@@ -60,12 +60,28 @@ async function getAudio(ytUrl) {
 // Devuelve un Readable stream listo para pasarle a Baileys.
 // Importante: un stream solo se puede consumir una vez, así que si
 // necesitás reenviar (audio + documento), pedí uno nuevo por cada envío.
+// Antes de mandarle el stream a Baileys, chequeamos que la URL
+// realmente sirva audio (content-type/length), para no descubrir
+// recién adentro de Baileys que la API devolvió basura.
 async function getAudioStream(url) {
   const res = await axios.get(url, {
     responseType: "stream",
     timeout: 60000,
     headers: { "User-Agent": "Mozilla/5.0" },
   });
+
+  const contentType = res.headers["content-type"] || "desconocido";
+  const contentLength = Number(res.headers["content-length"]) || 0;
+
+  const esAudio = contentType.startsWith("audio/") || contentType === "application/octet-stream";
+  const muyChico = contentLength > 0 && contentLength < 5000; // <5KB casi seguro es error/JSON
+
+  if (!esAudio || muyChico) {
+    throw new Error(
+      `respuesta inválida de la API de descarga (content-type: ${contentType}, tamaño: ${contentLength} bytes) — probablemente el link expiró o la API devolvió un error`
+    );
+  }
+
   return res.data;
 }
 
@@ -152,6 +168,7 @@ export default {
             `⛧ duración › ${formatDuration(yt.seconds)}\n` +
             `⛧ calidad › ${calidad}\n` +
             `⛧ formato › ${formato}\n` +
+            `⛧ api › ${audio.apiUsada}\n` +
             `⛧ link › ${youtube_url}`,
         },
         { quoted: msg }
