@@ -26,17 +26,24 @@ const APIS = [
     apikey: 'Duarte-zz12',
     timeout: 25000,
     parse: data => {
-      const downloadUrl = data?.data?.dl || data?.data?.url || data?.data?.download || data?.url || data?.dl
-      const title = data?.data?.title || data?.title || 'Audio'
-      
-      return data?.status && downloadUrl
-        ? { url: downloadUrl, title }
-        : null
+      if (!data) return null
+      // Busca la URL en todos los posibles esquemas de respuesta de Alyacore
+      const downloadUrl = 
+        data?.data?.dl || 
+        data?.data?.url || 
+        data?.data?.download || 
+        data?.result?.url || 
+        data?.result?.dl || 
+        data?.url || 
+        data?.dl
+
+      const title = data?.data?.title || data?.result?.title || data?.title || 'Audio'
+
+      return downloadUrl ? { url: downloadUrl, title } : null
     }
   }
 ]
 
-// Mantener la conversión exacta que ya funciona
 const convertLinkToOpus = async (audioUrl) => {
   const tmpDir = os.tmpdir()
   const outputPath = path.join(tmpDir, `out_${Date.now()}_${Math.random().toString(36).substring(7)}.opus`)
@@ -44,6 +51,7 @@ const convertLinkToOpus = async (audioUrl) => {
   await new Promise((resolve, reject) => {
     ffmpeg(audioUrl)
       .inputOptions([
+        '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         '-reconnect', '1',
         '-reconnect_streamed', '1',
         '-reconnect_delay_max', '5'
@@ -60,19 +68,21 @@ const convertLinkToOpus = async (audioUrl) => {
   return outputPath
 }
 
-// Mantener el fallback iterativo exacto
 const fetchAndConvert = async (ytUrl) => {
   for (const api of APIS) {
     try {
       console.log(`[play] Probando API: ${api.name}`)
       const { data } = await axios.get(api.endpoint, {
         params: { url: ytUrl, apikey: api.apikey },
-        timeout: api.timeout
+        timeout: api.timeout,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
       })
 
       const media = api.parse(data)
       if (!media?.url) {
-        console.warn(`[play] ${api.name} no devolvió una estructura con URL válida.`)
+        console.warn(`[play] ${api.name} no devolvió URL. Respuesta recibida:`, JSON.stringify(data))
         continue
       }
 
@@ -81,7 +91,7 @@ const fetchAndConvert = async (ytUrl) => {
       return { filePath, title: media.title }
 
     } catch (e) {
-      console.error(`[play] Falló la descarga/conversión con ${api.name}:`, e.message)
+      console.error(`[play] Error en ${api.name}:`, e?.message || e)
     }
   }
 
@@ -183,7 +193,6 @@ export default {
           from,
           {
             audio: { url: tempFilePath },
-            // Cambiamos 'audio/ogg; codecs=opus' por 'audio/ogg' para que WhatsApp permita guardar el archivo
             mimetype: 'audio/ogg',
             fileName: `${cleanFileName(finalTitle)}.opus`,
             seconds: info?.seconds || 0,
