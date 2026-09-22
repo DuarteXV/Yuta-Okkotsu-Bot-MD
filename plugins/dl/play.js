@@ -49,23 +49,26 @@ const APIS = [
 // hacía más lento el comando cuando la primera API tardaba/fallaba).
 const getDownloadLink = async (ytUrl) => {
   const intentos = APIS.map(async (api) => {
-    const { data } = await axios.get(api.endpoint, {
-      params: { url: ytUrl, apikey: api.apikey },
-      timeout: api.timeout,
-      headers: { 'User-Agent': UA }
-    })
+    try {
+      const { data } = await axios.get(api.endpoint, {
+        params: { url: ytUrl, apikey: api.apikey },
+        timeout: api.timeout,
+        headers: { 'User-Agent': UA }
+      })
 
-    const media = api.parse(data)
-    if (!media?.url) throw new Error(`${api.name}: respuesta sin URL de audio`)
+      const media = api.parse(data)
+      if (!media?.url) throw new Error(`${api.name}: respuesta sin URL de audio (data: ${JSON.stringify(data).slice(0, 200)})`)
 
-    return { ...media, apiUsada: api.name }
+      return { ...media, apiUsada: api.name }
+    } catch (e) {
+      const detalle = e.response
+        ? `HTTP ${e.response.status} - ${JSON.stringify(e.response.data).slice(0, 200)}`
+        : e.message
+      throw new Error(`${api.name}: ${detalle}`)
+    }
   })
 
-  try {
-    return await Promise.any(intentos)
-  } catch {
-    return null
-  }
+  return Promise.any(intentos)
 }
 
 const convertLinkToMp3 = async (audioUrl) => {
@@ -97,15 +100,19 @@ const convertLinkToMp3 = async (audioUrl) => {
 }
 
 const fetchAndConvert = async (ytUrl) => {
-  const media = await getDownloadLink(ytUrl)
-  if (!media?.url) return null
+  let media
+  try {
+    media = await getDownloadLink(ytUrl)
+  } catch (aggregateError) {
+    const detalle = aggregateError.errors?.map(e => e.message).join(' | ') || aggregateError.message
+    throw new Error(`ninguna API dio un link válido: ${detalle}`)
+  }
 
   try {
     const filePath = await convertLinkToMp3(media.url)
     return { filePath, title: media.title, apiUsada: media.apiUsada }
   } catch (e) {
-    console.error(`[play] conversión falló (${media.apiUsada}):`, e?.message || e)
-    return null
+    throw new Error(`la API '${media.apiUsada}' dio un link pero ffmpeg no pudo convertirlo: ${e.message}`)
   }
 }
 
@@ -172,11 +179,6 @@ export default {
       }, { quoted: msg })
 
       const resDl = await fetchAndConvert(url)
-
-      if (!resDl?.filePath) {
-        await react('❌')
-        return reply({ text: '⛧ no se pudo procesar el audio de ninguna API' })
-      }
 
       tempFilePath = resDl.filePath
       const stats = fs.statSync(tempFilePath)
