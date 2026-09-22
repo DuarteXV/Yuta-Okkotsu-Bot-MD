@@ -1,3 +1,5 @@
+import config from '../../config.js'
+
 function cleanJid(jid = "") {
   if (!jid) return "";
   const atIndex = jid.lastIndexOf("@");
@@ -18,7 +20,6 @@ export default {
   async run({ sock, from, msg, groupMeta, clearGroupCache, reply }) {
     const participants = groupMeta?.participants || []
 
-    // 🔧 Resuelve el target sea cual sea el campo que traiga (LID o real)
     const contextInfo = msg.message?.extendedTextMessage?.contextInfo || msg.message?.imageMessage?.contextInfo || msg.message?.videoMessage?.contextInfo
     const mentioned = contextInfo?.mentionedJid || []
 
@@ -27,7 +28,6 @@ export default {
 
     const cleanTarget = targetRaw.split(':')[0]
 
-    // Si vino como LID, resolver contra groupMeta.participants
     let targetJid = cleanJid(cleanTarget)
     if (cleanTarget.endsWith('@lid')) {
       const match = participants.find(p => p.lid === cleanTarget)
@@ -36,6 +36,11 @@ export default {
 
     const botJid = cleanJid(sock.user?.id)
     if (targetJid === botJid) return await reply({ text: `❌ No me puedes expulsar a mí.` })
+
+    // 🔧 Filtro de owners/co-owners
+    const targetNumber = targetJid.split('@')[0]
+    const owners = [...(config.ownerNumber || []), ...(config.coOwners || [])]
+    if (owners.includes(targetNumber)) return await reply({ text: `❌ No puedo expulsar al owner del bot.` })
 
     const targetParticipant = participants.find(p => cleanJid(p.id) === targetJid)
     if (targetParticipant?.admin === 'superadmin') return await reply({ text: `❌ No puedo expulsar al creador del grupo.` })
