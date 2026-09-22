@@ -51,13 +51,26 @@ const fetchData = async url => {
   }
 }
 
-const getAudioBuffer = async url => {
+const getAudioData = async url => {
   const res = await axios.get(url, {
     responseType: 'arraybuffer',
     timeout: 60000,
     headers: { 'User-Agent': 'Mozilla/5.0' }
   })
-  return Buffer.from(res.data)
+  
+  const contentType = res.headers['content-type'] || ''
+  let mimetype = 'audio/mpeg'
+  
+  if (contentType.includes('mp4') || contentType.includes('m4a')) {
+    mimetype = 'audio/mp4'
+  } else if (contentType.includes('ogg')) {
+    mimetype = 'audio/ogg; codecs=opus'
+  }
+
+  return {
+    buffer: Buffer.from(res.data),
+    mimetype
+  }
 }
 
 const cleanFileName = name =>
@@ -129,7 +142,7 @@ export default {
         return reply({ text: '⛧ no se pudo obtener el audio de las APIs' })
       }
 
-      const audioBuffer = await getAudioBuffer(resDl.url)
+      const { buffer: audioBuffer, mimetype } = await getAudioData(resDl.url)
       const finalTitle = resDl.title || title
       const fileName = `${cleanFileName(finalTitle)}.mp3`
       const sizeMB = audioBuffer.length / 1024 / 1024
@@ -141,7 +154,7 @@ export default {
           from,
           {
             document: audioBuffer,
-            mimetype: 'audio/mpeg',
+            mimetype,
             fileName,
             caption: '⛧ audio enviado como documento por duración/tamaño'
           },
@@ -152,7 +165,8 @@ export default {
           from,
           {
             audio: audioBuffer,
-            mimetype: 'audio/mpeg',
+            mimetype,
+            seconds: info?.seconds || 0,
             ptt: false
           },
           { quoted: msg }
