@@ -19,13 +19,13 @@
 </p>
 
 > [!NOTE]
-> **Yuta Okotsu Bot MD** está pensado para ofrecer una experiencia limpia, modular y fácil de usar en WhatsApp. El proyecto se mantiene en evolución constante para mejorar funciones, estabilidad y compatibilidad.
+> **Yuta Okkotsu Bot MD** está pensado para ofrecer una experiencia limpia, modular y fácil de usar en WhatsApp. El proyecto se mantiene en evolución constante para mejorar funciones, estabilidad y compatibilidad.
 
 ---
 
 ## 🌱 Descripción
 
-**Yuta Okotsu Bot MD** es un bot de WhatsApp basado en `baileys`, creado con una estructura modular para manejar comandos, subbots, sesiones, base de datos y funciones multimedia de forma organizada.
+**Yuta Okkotsu Bot MD** es un bot de WhatsApp basado en `baileys`, creado con una estructura modular para manejar comandos, subbots, sesiones, base de datos y funciones multimedia de forma organizada.
 
 Su diseño está orientado a mantener el código limpio, facilitar la expansión del proyecto y permitir que otros usuarios puedan vincular sus propios números como subbots.
 
@@ -62,7 +62,7 @@ apt update && apt upgrade -y
 apt install git nodejs ffmpeg build-essential -y
 ```
 ```bash
-git clone https://github.com/DuarteXV/Yuta-Okotsu-Bot-MD.git Yuta
+git clone https://github.com/DuarteXV/Yuta-Okkotsu-Bot-MD.git Yuta
 ```
 ```bash
 cd Yuta
@@ -89,7 +89,7 @@ pkg update && pkg upgrade -y
 pkg install -y nodejs-lts git python clang make pkg-config libvips ffmpeg libwebp
 ```
 ```bash
-git clone https://github.com/DuarteXV/Yuta-Okotsu-Bot-MD.git Yuta && cd Yuta
+git clone https://github.com/DuarteXV/Yuta-Okkotsu-Bot-MD.git Yuta && cd Yuta
 ```
 ```bash
 export GYP_DEFINES="android_ndk_path=''"
@@ -190,7 +190,7 @@ Yuta-Okotsu-Bot-MD/
 
 ## 🐢 Sistema de Subbots
 
-Yuta Okotsu cuenta con soporte para **subbots**, permitiendo que otros usuarios vinculen sus propios números y usen el sistema de forma independiente.
+Yuta Okkotsu cuenta con soporte para **subbots**, permitiendo que otros usuarios vinculen sus propios números y usen el sistema de forma independiente.
 
 ---
 
@@ -222,7 +222,7 @@ Parte de las funciones multimedia y de descarga del bot se apoyan en servicios e
 
 ## 🌲 Colaboradores
 
-Personas que han aportado código, ideas y soporte al desarrollo de **Yuta Okotsu Bot MD**:
+Personas que han aportado código, ideas y soporte al desarrollo de **Yuta Okkotsu Bot MD**:
 
 <table align="center">
 <tr>
@@ -256,7 +256,7 @@ Personas que han aportado código, ideas y soporte al desarrollo de **Yuta Okots
 > Este proyecto **no está afiliado a WhatsApp ni a Meta**.  
 > Es un bot independiente desarrollado con **Baileys**.
 
-🌱 La temática visual está inspirada en **Jujutsu Kaisen** y el personaje **Yuta Okotsu**.
+🌱 La temática visual está inspirada en **Jujutsu Kaisen** y el personaje **Yuta Okkotsu**.
 
 ---
 
