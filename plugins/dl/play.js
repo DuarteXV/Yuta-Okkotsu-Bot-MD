@@ -1,145 +1,58 @@
 import axios from 'axios'
 import yts from 'yt-search'
-import ffmpeg from 'fluent-ffmpeg'
-import fs from 'fs'
-import path from 'path'
-import os from 'os'
+import { prepareWAMessageMedia } from '@whiskeysockets/baileys'
 
-const LIMIT_MB = 50
+const API_URL = 'https://api.alyacore.xyz/dl/ytmp3v2'
+const API_KEY = 'Duarte-zz12'
+const LIMIT_BYTES = 50 * 1024 * 1024
 const LONG_AUDIO_SECONDS = 1800
-const ID_RE = /(?:youtu\.be\/|v=|shorts\/)([\w-]{11})/
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+const ID_RE = /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/|v\/))([\w-]{11})/
 
-const APIS = [
-  {
-    name: 'alyacore',
-    endpoint: 'https://api.alyacore.xyz/dl/ytmp3v2',
-    apikey: 'Duarte-zz12',
-    timeout: 25000,
-    referer: 'https://api.alyacore.xyz/',
-    parse: data => {
-      if (!data) return null
-      const downloadUrl =
-        data?.data?.dl ||
-        data?.data?.url ||
-        data?.data?.download ||
-        data?.result?.url ||
-        data?.result?.dl ||
-        data?.url ||
-        data?.dl
+const MEDIA_OPTS = {
+  options: { timeout: 0, maxRedirects: 10, maxContentLength: Infinity, maxBodyLength: Infinity, headers: { 'user-agent': 'Mozilla/5.0' } },
+  mediaUploadTimeoutMs: 1000 * 60 * 60
+}
 
-      const title = data?.data?.title || data?.result?.title || data?.title || 'Audio'
+const pedirDescarga = (url) => {
+  const p = axios.get(API_URL, { params: { url, apikey: API_KEY }, timeout: 60000 }).then(r => r.data)
+  p.catch(() => {})
+  return p
+}
 
-      return downloadUrl ? { url: downloadUrl, title } : null
-    }
+async function buscarVideo(query, id) {
+  if (id) {
+    const info = await yts({ videoId: id }).catch(() => null)
+    if (info) return info
   }
-]
+  const search = await yts(query).catch(() => null)
+  return search?.videos?.[0] || null
+}
 
-// Antes de mandarle la URL a ffmpeg (que tira errores genéricos tipo
-// "Invalid data found"), pedimos los primeros bytes para ver si
-// realmente es audio o si es un JSON/HTML de error — así el mensaje
-// de fallo dice la causa real en vez de un error opaco de ffmpeg.
-const sniffUrl = async (url, referer) => {
+async function buildLinkPreview(sock, imagen, title, description, url) {
   try {
-    const res = await axios.get(url, {
-      timeout: 10000,
-      responseType: 'arraybuffer',
-      headers: {
-        'User-Agent': UA,
-        'Range': 'bytes=0-2047',
-        ...(referer ? { Referer: referer } : {})
-      },
-      validateStatus: () => true
-    })
-
-    const contentType = res.headers['content-type'] || 'desconocido'
-    const buf = Buffer.from(res.data)
-    const looksLikeText = buf.slice(0, 1).toString().match(/[{<]/)
-
-    if (res.status >= 400 || looksLikeText || !contentType.match(/audio|octet-stream|video/)) {
-      const preview = buf.slice(0, 200).toString('utf8').replace(/\s+/g, ' ')
-      throw new Error(`HTTP ${res.status}, content-type: ${contentType}, body: "${preview}"`)
+    const { imageMessage } = await prepareWAMessageMedia(
+      { image: { url: imagen } },
+      { upload: sock.waUploadToServer, mediaTypeOverride: 'thumbnail-link' }
+    )
+    return {
+      'canonical-url': url,
+      'matched-text': url,
+      title,
+      description,
+      jpegThumbnail: imageMessage?.jpegThumbnail ? Buffer.from(imageMessage.jpegThumbnail) : undefined,
+      highQualityThumbnail: imageMessage || undefined
     }
-  } catch (e) {
-    if (e.message.startsWith('HTTP')) throw e
-    throw new Error(`no se pudo verificar el link: ${e.message}`)
+  } catch {
+    return undefined
   }
 }
 
-// Consulta las APIs EN PARALELO y devuelve la primera que responda
-// con un link válido, en vez de esperar una por una (eso era lo que
-// hacía más lento el comando cuando la primera API tardaba/fallaba).
-const getDownloadLink = async (ytUrl) => {
-  const intentos = APIS.map(async (api) => {
-    try {
-      const { data } = await axios.get(api.endpoint, {
-        params: { url: ytUrl, apikey: api.apikey },
-        timeout: api.timeout,
-        headers: { 'User-Agent': UA }
-      })
-
-      const media = api.parse(data)
-      if (!media?.url) throw new Error(`${api.name}: respuesta sin URL de audio (data: ${JSON.stringify(data).slice(0, 200)})`)
-
-      await sniffUrl(media.url, api.referer)
-
-      return { ...media, apiUsada: api.name, referer: api.referer }
-    } catch (e) {
-      const detalle = e.response
-        ? `HTTP ${e.response.status} - ${JSON.stringify(e.response.data).slice(0, 200)}`
-        : e.message
-      throw new Error(`${api.name}: ${detalle}`)
-    }
-  })
-
-  return Promise.any(intentos)
-}
-
-const convertLinkToMp3 = async (audioUrl, referer) => {
-  const tmpDir = os.tmpdir()
-  const outputPath = path.join(tmpDir, `out_${Date.now()}_${Math.random().toString(36).substring(7)}.mp3`)
-
-  const headerLines = [`User-Agent: ${UA}`]
-  if (referer) headerLines.push(`Referer: ${referer}`)
-
-  await new Promise((resolve, reject) => {
-    ffmpeg(audioUrl)
-      .inputOptions([
-        '-headers', headerLines.join('\r\n') + '\r\n',
-        '-reconnect', '1',
-        '-reconnect_streamed', '1',
-        '-reconnect_delay_max', '5'
-      ])
-      .outputOptions([
-        '-vn',
-        '-ac', '2',
-        '-ar', '44100',
-        '-b:a', '128k'
-      ])
-      .toFormat('mp3')
-      .audioCodec('libmp3lame')
-      .on('error', (err) => reject(err))
-      .on('end', () => resolve())
-      .save(outputPath)
-  })
-
-  return outputPath
-}
-
-const fetchAndConvert = async (ytUrl) => {
-  let media
+async function pesoRemoto(url) {
   try {
-    media = await getDownloadLink(ytUrl)
-  } catch (aggregateError) {
-    const detalle = aggregateError.errors?.map(e => e.message).join(' | ') || aggregateError.message
-    throw new Error(`ninguna API dio un link válido: ${detalle}`)
-  }
-
-  try {
-    const filePath = await convertLinkToMp3(media.url, media.referer)
-    return { filePath, title: media.title, apiUsada: media.apiUsada }
-  } catch (e) {
-    throw new Error(`la API '${media.apiUsada}' dio un link pero ffmpeg no pudo convertirlo: ${e.message}`)
+    const res = await axios.head(url, { timeout: 10000, maxRedirects: 10 })
+    return parseInt(res.headers['content-length'] || '0', 10) || 0
+  } catch {
+    return 0
   }
 }
 
@@ -161,38 +74,33 @@ export default {
   ownerOnly: false,
 
   async run({ sock, from, msg, react, reply, text, args }) {
-    let tempFilePath = null
-
     try {
-      const query = text || args.join(" ")
-      if (!query?.trim()) {
+      const query = (text || args.join(" ")).trim()
+      if (!query) {
         return reply({ text: '⛧ escribe el nombre o link del video' })
       }
 
       await react('🎧')
 
       const id = query.match(ID_RE)?.[1]
-      let info = null
+      const urlDirecta = id ? `https://youtu.be/${id}` : null
 
-      if (id) {
-        info = await yts({ videoId: id }).catch(() => null)
-      }
+      let descarga = urlDirecta ? pedirDescarga(urlDirecta) : null
 
-      if (!info) {
-        const search = await yts(query).catch(() => null)
-        info = search?.videos?.[0] || search?.all?.[0]
-      }
+      const info = await buscarVideo(query, id)
 
-      if (!info && !id) {
+      if (!info && !urlDirecta) {
         await react('❌')
         return reply({ text: '⛧ no encontré resultados' })
       }
 
-      const url = info?.url || `https://www.youtube.com/watch?v=${id}`
+      const url = info?.url || urlDirecta
       const title = info?.title || 'Sin título'
       const duration = info?.timestamp || 'No disponible'
       const vistas = formatViews(info?.views)
-      const thumbnail = info?.thumbnail ?? info?.image ?? `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
+      const thumbnail = info?.thumbnail || info?.image || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
+
+      descarga ??= pedirDescarga(url)
 
       const captionText =
         `⛧ ${title}\n\n` +
@@ -200,46 +108,34 @@ export default {
         `⛧ duración › ${duration}\n` +
         `⛧ link › ${url}`
 
-      const sendImagePromise = sock.sendMessage(from, {
-        image: { url: thumbnail },
-        caption: captionText
-      }, { quoted: msg })
+      const linkPreview = await buildLinkPreview(sock, thumbnail, title, info?.author?.name || 'YouTube', url)
 
-      const resDl = await fetchAndConvert(url)
+      await sock.sendMessage(from, { text: captionText, linkPreview }, { quoted: msg })
 
-      tempFilePath = resDl.filePath
-      const stats = fs.statSync(tempFilePath)
-      const sizeMB = stats.size / 1024 / 1024
+      const resDl = await descarga.catch(() => null)
+      const dl = resDl?.data?.dl || resDl?.data?.url || resDl?.result?.url || resDl?.url
+      if (!dl) {
+        await react('❌')
+        return reply({ text: '⛧ error: la API no dio un link de audio' })
+      }
 
-      const finalTitle = resDl.title || title
-      const fileName = `${cleanFileName(finalTitle)}.mp3`
-      const isLong = sizeMB >= LIMIT_MB || (info?.seconds || 0) > LONG_AUDIO_SECONDS
-
-      await sendImagePromise
+      const fileName = `${cleanFileName(resDl?.data?.title || title)}.mp3`
+      const isLong = (info?.seconds || 0) > LONG_AUDIO_SECONDS || (await pesoRemoto(dl)) >= LIMIT_BYTES
 
       if (isLong) {
-        await sock.sendMessage(
-          from,
-          {
-            document: { url: tempFilePath },
-            mimetype: 'audio/mpeg',
-            fileName,
-            caption: '⛧ audio enviado como documento por duración/tamaño'
-          },
-          { quoted: msg }
-        )
+        await sock.sendMessage(from, {
+          document: { url: dl },
+          mimetype: 'audio/mpeg',
+          fileName,
+          caption: '⛧ audio enviado como documento por duración/tamaño'
+        }, { quoted: msg, ...MEDIA_OPTS })
       } else {
-        await sock.sendMessage(
-          from,
-          {
-            audio: { url: tempFilePath },
-            mimetype: 'audio/mp4',
-            fileName: fileName,
-            seconds: info?.seconds || 0,
-            ptt: false
-          },
-          { quoted: msg }
-        )
+        await sock.sendMessage(from, {
+          audio: { url: dl },
+          mimetype: 'audio/mpeg',
+          fileName,
+          ptt: false
+        }, { quoted: msg, ...MEDIA_OPTS })
       }
 
       await react('✅')
@@ -247,10 +143,6 @@ export default {
       console.error('[dl:play]', e?.message || e)
       await react('❌')
       await reply({ text: `⛧ error: ${e.message}` })
-    } finally {
-      if (tempFilePath && fs.existsSync(tempFilePath)) {
-        fs.unlinkSync(tempFilePath)
-      }
     }
   }
 }
