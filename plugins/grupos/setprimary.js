@@ -1,5 +1,5 @@
 import { db } from '../../database/db.js'
-import { activeBots } from '../../core/subbotManager.js'
+import { activeBots, claimOnce } from '../../core/subbotManager.js'
 
 function cleanJid(jid = "") {
   if (!jid) return "";
@@ -17,21 +17,21 @@ export default {
   groupOnly: true,
   adminOnly: true,
 
-  async run({ from, msg, react, reply, resolveLid, botJid }) {
+  async run({ from, msg, react, reply, resolveLid }) {
+    if (!claimOnce(msg.key.id)) return
+
     const parseNum = (jid) => jid ? jid.split('@')[0] : null
-
     const primary = db.getPrimary(from)
-    const myNum = parseNum(botJid?.split(':')[0])
 
-    // Si ya hay un primario en el grupo, que solo ese bot procese el comando
-    if (primary && myNum !== primary) {
-      return
-    }
+    // Mención directa en el propio mensaje del comando: .setprimary @numero
+    const ownMentions = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []
 
+    // Cita a un mensaje del bot (comportamiento anterior, lo dejamos como fallback)
     const quoted = msg.message?.extendedTextMessage?.contextInfo || msg.message?.imageMessage?.contextInfo || msg.message?.videoMessage?.contextInfo
-
-    const mentioned = quoted?.mentionedJid || []
-    const targetRaw = mentioned[0] ? cleanJid(mentioned[0]) : (quoted?.participant ? cleanJid(quoted.participant) : null)
+    const quotedMentions = quoted?.mentionedJid || []
+    const targetRaw = ownMentions[0]
+      ? cleanJid(ownMentions[0])
+      : (quotedMentions[0] ? cleanJid(quotedMentions[0]) : (quoted?.participant ? cleanJid(quoted.participant) : null))
 
     let quotedSender = null
     if (targetRaw) {
@@ -47,13 +47,12 @@ export default {
         const num = parseNum(cleanJid(bot.jid)) || 'N/A'
         texto += `  ✦ *${bot.label || 'Sub-Bot'}* → @${num}\n`
       }
-      texto += `\nResponde a un mensaje de ese bot y ejecuta *.setprimary* de nuevo.`
+      texto += `\nMenciona a ese bot (@número) y ejecuta *.setprimary* de nuevo.`
 
       const mentionJids = botsActivos.map(([, bot]) => cleanJid(bot.jid)).filter(Boolean)
       return await reply({ text: texto, mentions: mentionJids })
     }
 
-    // Validación: el número mencionado/citado tiene que ser un bot real (main o sub) activo en esta sesión
     const esBotValido = botsActivos.some(([, bot]) => parseNum(cleanJid(bot.jid)) === quotedSender)
 
     if (!esBotValido) {
@@ -66,7 +65,7 @@ export default {
     const whoJid = cleanJid(`${whoNum}@s.whatsapp.net`)
 
     if (primary === whoNum) {
-      return;
+      return await reply({ text: `@${whoNum} ya es el bot primario de este grupo.`, mentions: [whoJid] })
     }
 
     db.setPrimary(from, whoNum)
