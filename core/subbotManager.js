@@ -25,6 +25,17 @@ let mainSock = null;
 const logger = pino({ level: "silent" });
 const PAIRING_TIMEOUT_MS = 60_000;
 
+// Lock en memoria para evitar que varios bots/subbots respondan
+// el mismo comando (ej: setprimary/delprimary) por duplicado.
+const claimedCmds = new Set();
+
+export function claimOnce(msgId) {
+  if (claimedCmds.has(msgId)) return false;
+  claimedCmds.add(msgId);
+  setTimeout(() => claimedCmds.delete(msgId), 30_000);
+  return true;
+}
+
 function backoffDelay(attempt) {
   const base = 5000;
   const capped = Math.min(60_000, base * Math.pow(1.6, Math.min(attempt, 8)));
