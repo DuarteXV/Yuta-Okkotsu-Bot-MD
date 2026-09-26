@@ -1,10 +1,9 @@
 import axios from 'axios'
-import yts from 'yt-search'
 import { prepareWAMessageMedia } from '@whiskeysockets/baileys'
 
 const API_URL = 'https://api.alyacore.xyz/dl/ytmp3v2'
+const SEARCH_URL = 'https://api.alyacore.xyz/search/yt'
 const API_KEY = 'Duarte-zz12'
-const LIMIT_BYTES = 50 * 1024 * 1024
 const LONG_AUDIO_SECONDS = 1800
 const ID_RE = /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/|v\/))([\w-]{11})/
 
@@ -19,13 +18,27 @@ const pedirDescarga = (url) => {
   return p
 }
 
+const toSeconds = t => String(t || '').split(':').reduce((a, v) => a * 60 + (parseInt(v, 10) || 0), 0)
+const toNumber = v => parseInt(String(v || '').replace(/\D/g, ''), 10) || 0
+
 async function buscarVideo(query, id) {
-  if (id) {
-    const info = await yts({ videoId: id }).catch(() => null)
-    if (info) return info
+  try {
+    const { data } = await axios.get(SEARCH_URL, { params: { query: id || query, key: API_KEY }, timeout: 30000 })
+    const results = data?.status && Array.isArray(data.result) ? data.result : []
+    const v = id ? results.find(r => r.url?.includes(id)) : results[0]
+    if (!v) return null
+    return {
+      url: v.url,
+      title: v.title,
+      timestamp: v.duration,
+      seconds: toSeconds(v.duration),
+      views: toNumber(v.views),
+      thumbnail: v.banner,
+      author: { name: v.autor?.trim() }
+    }
+  } catch {
+    return null
   }
-  const search = await yts(query).catch(() => null)
-  return search?.videos?.[0] || null
 }
 
 async function buildLinkPreview(sock, imagen, title, description, url) {
@@ -44,15 +57,6 @@ async function buildLinkPreview(sock, imagen, title, description, url) {
     }
   } catch {
     return undefined
-  }
-}
-
-async function pesoRemoto(url) {
-  try {
-    const res = await axios.head(url, { timeout: 10000, maxRedirects: 10 })
-    return parseInt(res.headers['content-length'] || '0', 10) || 0
-  } catch {
-    return 0
   }
 }
 
@@ -98,7 +102,7 @@ export default {
       const title = info?.title || 'Sin título'
       const duration = info?.timestamp || 'No disponible'
       const vistas = formatViews(info?.views)
-      const thumbnail = info?.thumbnail || info?.image || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
+      const thumbnail = info?.thumbnail || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
 
       descarga ??= pedirDescarga(url)
 
@@ -120,14 +124,14 @@ export default {
       }
 
       const fileName = `${cleanFileName(resDl?.data?.title || title)}.mp3`
-      const isLong = (info?.seconds || 0) > LONG_AUDIO_SECONDS || (await pesoRemoto(dl)) >= LIMIT_BYTES
+      const isLong = (info?.seconds || 0) > LONG_AUDIO_SECONDS
 
       if (isLong) {
         await sock.sendMessage(from, {
           document: { url: dl },
           mimetype: 'audio/mpeg',
           fileName,
-          caption: '⛧ audio enviado como documento por duración/tamaño'
+          caption: '⛧ audio enviado como documento por duración'
         }, { quoted: msg, ...MEDIA_OPTS })
       } else {
         await sock.sendMessage(from, {
