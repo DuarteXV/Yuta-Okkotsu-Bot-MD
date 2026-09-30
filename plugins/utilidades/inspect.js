@@ -45,11 +45,13 @@ export default {
                     return await reply({ text: `❌ No se encontró información del canal. Verifique que el enlace sea correcto.` })
                 }
 
+                const meta = info.thread_metadata || {}
+
                 const id = info.id || 'No encontrado'
-                const nombre = info.name || 'Sin nombre'
-                const descripcion = info.description || 'Sin descripción'
-                const suscriptores = info.subscriberCount ?? 'No disponible'
-                const verificado = info.verified ? '✅ Verificado' : '❌ No verificado'
+                const nombre = meta.name?.text || 'Sin nombre'
+                const descripcion = meta.description?.text || 'Sin descripción'
+                const suscriptores = meta.subscribers_count ?? 'No disponible'
+                const verificado = meta.verification === 'VERIFIED' ? '✅ Verificado' : '❌ No verificado'
 
                 caption =
 `📢 *INFORMACIÓN DEL CANAL*
