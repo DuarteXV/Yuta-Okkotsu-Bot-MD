@@ -209,7 +209,7 @@ export async function handleMessage(sock, rawMsg, botLabel = "MAIN", mainBotNum 
     if (isGroup) {
       const groupData = db.getGroup(from);
 
-      if (groupData?.privateMode && !isOwner && !isCoOwner) {
+      if (groupData?.selfMode && !isOwner && !isCoOwner && !msg.key?.fromMe) {
         return;
       }
 
@@ -293,7 +293,7 @@ export async function handleMessage(sock, rawMsg, botLabel = "MAIN", mainBotNum 
       },
     };
 
-    if (plugin.ownerOnly && !isOwner) return ctx.reply({ text: "❌ Solo el owner puede usar este comando." });
+    if (plugin.ownerOnly && !isOwner && !msg.key?.fromMe) return ctx.reply({ text: "❌ Solo el owner puede usar este comando." });
     if (plugin.modOnly && !isMod) return ctx.reply({ text: "❌ Solo moderadores pueden usar este comando." });
     if (plugin.botAdmin && isGroup && !isBotAdmin) return ctx.reply({ text: "❌ El bot necesita ser admin del grupo." });
     if (plugin.adminOnly && isGroup && !isAdmin && !isMod) return ctx.reply({ text: "❌ Solo administradores del grupo pueden usar este comando." });
