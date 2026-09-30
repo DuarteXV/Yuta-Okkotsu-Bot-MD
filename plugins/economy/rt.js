@@ -1,14 +1,5 @@
 import { db } from '../../database/db.js'
 
-function cleanJid(jid = "") {
-  if (!jid) return "";
-  const atIndex = jid.lastIndexOf("@");
-  if (atIndex === -1) return jid.split(":")[0];
-  const userPart = jid.slice(0, atIndex).split(":")[0];
-  const domainPart = jid.slice(atIndex + 1);
-  return `${userPart}@${domainPart}`;
-}
-
 // Números rojos en la ruleta europea estándar (0 = verde, el resto negro)
 const ROJOS = [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]
 
@@ -35,25 +26,27 @@ export default {
   category: 'economy',
   groupOnly: true,
 
-  async run({ sock, from, msg, text, reply }) {
-    const sender = msg.key.participant || msg.key.remoteJid
-    const jugador = cleanJid(sender)
+  async run({ sender, args, reply, react }) {
+    if (args.length < 2) return await reply({ text: `⚠️ Uso incorrecto.\n\n*Ejemplo:* .rt rojo 500` })
 
-    const partes = text.trim().split(/\s+/)
-    if (partes.length < 2) return await reply({ text: `❌ Uso incorrecto.\n\n💡 *.rt <rojo|negro|verde> <cantidad>*` })
-
-    const colorInput = COLORES[partes[0].toLowerCase()]
-    const apuesta = parseInt(partes[1])
+    const colorInput = COLORES[(args[0] || '').toLowerCase()]
+    const apuesta = parseInt(args[1])
 
     if (!colorInput) return await reply({ text: `❌ Color inválido. Usa: *rojo*, *negro* o *verde*.` })
-    if (!apuesta || apuesta <= 0) return await reply({ text: `❌ Indica un monto de apuesta válido.` })
+    if (!apuesta || isNaN(apuesta) || apuesta <= 0) return await reply({ text: `❌ Indica un monto de apuesta válido.` })
 
-    const eco = db.getEco(jugador)
-    if (eco.bolsillo < apuesta) return await reply({ text: `❌ No tienes suficiente dinero en tu bolsillo.` })
+    const eco = db.getEco(sender)
+    if (eco.bolsillo < apuesta) {
+      return await reply({ text: `❌ No tenés suficientes Fragmentos en el bolsillo.\n\n*Bolsillo:* ${eco.bolsillo} Fragmentos` })
+    }
 
-    const numero = jugador.split('@')[0]
+    const numero = sender.split('@')[0]
 
-    await reply({ text: `🎡 *RULETA*\n\n@${numero} apostó *${apuesta}* 💰 a ${EMOJI[colorInput]} *${colorInput}*\n\n🌀 Girando la ruleta...`, mentions: [jugador] })
+    await react('🎡')
+    await reply({
+      text: `🎡 *RULETA*\n\n@${numero} apostó *${apuesta}* Fragmentos a ${EMOJI[colorInput]} *${colorInput}*\n\n🌀 Girando la ruleta...`,
+      mentions: [sender]
+    })
 
     await new Promise(res => setTimeout(res, 2000))
 
@@ -64,13 +57,15 @@ export default {
 
     if (gano) {
       const ganancia = apuesta * PAGO[colorInput]
-      db.setEco(jugador, { bolsillo: eco.bolsillo + (ganancia - apuesta) })
-      mensaje += `🏆 @${numero} ganó *${ganancia}* 💰 (x${PAGO[colorInput]})`
+      db.setEco(sender, { bolsillo: eco.bolsillo + (ganancia - apuesta) })
+      mensaje += `🏆 @${numero} ganó *${ganancia}* Fragmentos (x${PAGO[colorInput]})`
+      await react('🏆')
     } else {
-      db.setEco(jugador, { bolsillo: eco.bolsillo - apuesta })
+      db.setEco(sender, { bolsillo: eco.bolsillo - apuesta })
       mensaje += `💸 @${numero} perdió su apuesta.`
+      await react('💸')
     }
 
-    await reply({ text: mensaje, mentions: [jugador] })
+    await reply({ text: mensaje, mentions: [sender] })
   }
 }
