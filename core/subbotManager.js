@@ -25,10 +25,6 @@ let mainSock = null;
 const logger = pino({ level: "silent" });
 const PAIRING_TIMEOUT_MS = 60_000;
 
-// Arranque en lotes: BATCH_SIZE subbots a la vez, BATCH_DELAY ms entre lotes
-const BATCH_SIZE = 5;
-const BATCH_DELAY = 1500;
-
 // Lock en memoria para evitar que varios bots/subbots respondan
 // el mismo comando (ej: setprimary/delprimary) por duplicado.
 const claimedCmds = new Set();
@@ -65,47 +61,29 @@ function esLabelGenerico(label) {
   return !label || label === "Subbot" || label === "MAIN" || label.startsWith("SUB_");
 }
 
-// Versión de WhatsApp en caché: una sola petición para todos los bots
-let _waVersion;
-export async function getWAVersion() {
-  _waVersion ??= await fetchLatestBaileysVersion().then((r) => r.version).catch(() => undefined);
-  return _waVersion;
-}
-
-export function useSQLiteAuthState(sessionDir) {
-  fs.mkdirSync(sessionDir, { recursive: true });
+async function useSQLiteAuthState(sessionDir) {
+  if (!fs.existsSync(sessionDir)) {
+    fs.mkdirSync(sessionDir, { recursive: true });
+  }
 
   const authDb = new Database(path.join(sessionDir, "auth.db"));
   authDb.pragma("journal_mode = WAL");
-  authDb.pragma("synchronous = NORMAL");
-  authDb.pragma("cache_size = -256");
-  authDb.pragma("mmap_size = 0");
-  authDb.exec("CREATE TABLE IF NOT EXISTS auth (id TEXT PRIMARY KEY, data TEXT)");
-
-  const qGet = authDb.prepare("SELECT data FROM auth WHERE id = ?");
-  const qSet = authDb.prepare("INSERT OR REPLACE INTO auth (id, data) VALUES (?, ?)");
-  const qDel = authDb.prepare("DELETE FROM auth WHERE id = ?");
+  authDb.exec(`CREATE TABLE IF NOT EXISTS auth (id TEXT PRIMARY KEY, data TEXT)`);
 
   const readData = (id) => {
-    const row = qGet.get(id);
+    const row = authDb.prepare("SELECT data FROM auth WHERE id = ?").get(id);
     return row ? JSON.parse(row.data, BufferJSON.reviver) : null;
   };
 
   const writeData = (data, id) => {
-    qSet.run(id, JSON.stringify(data, BufferJSON.replacer));
+    authDb
+      .prepare("INSERT OR REPLACE INTO auth (id, data) VALUES (?, ?)")
+      .run(id, JSON.stringify(data, BufferJSON.replacer));
   };
 
-  const creds = readData("creds") || initAuthCreds();
+  const removeData = (id) => authDb.prepare("DELETE FROM auth WHERE id = ?").run(id);
 
-  const setMany = authDb.transaction((data) => {
-    for (const cat in data) {
-      for (const id in data[cat]) {
-        const val = data[cat][id];
-        if (val) writeData(val, `${cat}-${id}`);
-        else qDel.run(`${cat}-${id}`);
-      }
-    }
-  });
+  let creds = readData("creds") || initAuthCreds();
 
   return {
     state: {
@@ -113,28 +91,32 @@ export function useSQLiteAuthState(sessionDir) {
       keys: {
         get: async (type, ids) => {
           const data = {};
-          for (const id of ids) {
+          ids.forEach((id) => {
             let value = readData(`${type}-${id}`);
             if (type === "app-state-sync-key" && value) {
               value = proto.Message.AppStateSyncKeyData.fromObject(value);
             }
             data[id] = value;
-          }
+          });
           return data;
         },
-        set: async (data) => setMany(data),
+        set: async (data) => {
+          for (const cat in data) {
+            for (const id in data[cat]) {
+              const val = data[cat][id];
+              if (val) {
+                writeData(val, `${cat}-${id}`);
+              } else {
+                removeData(`${cat}-${id}`);
+              }
+            }
+          }
+        },
       },
     },
     saveCreds: () => writeData(creds, "creds"),
     closeDb: () => { try { authDb.close(); } catch {} },
   };
-}
-
-const SOCK_EVENTS = ["messages.upsert", "creds.update", "connection.update", "group-participants.update"];
-
-export function cleanupSocket(sock) {
-  try { for (const e of SOCK_EVENTS) sock.ev.removeAllListeners(e); } catch {}
-  try { sock.end?.(undefined); } catch {}
 }
 
 export function registerMainBot(sock, label = "MAIN") {
@@ -265,8 +247,8 @@ function handleSockExit(id) {
 async function startSubbotConnection(id, sessionDir, phoneNumber = null, onCode = null, _attempt = 0) {
   await mkdir(sessionDir, { recursive: true });
 
-  const { state, saveCreds, closeDb } = useSQLiteAuthState(sessionDir);
-  const version = await getWAVersion();
+  const { state, saveCreds, closeDb } = await useSQLiteAuthState(sessionDir);
+  const { version } = await fetchLatestBaileysVersion();
   const useCode = !!phoneNumber && !state.creds.registered;
 
   let sock;
@@ -299,7 +281,6 @@ async function startSubbotConnection(id, sessionDir, phoneNumber = null, onCode 
       logger,
       browser: ["Ubuntu", "Chrome", "20.0.04"],
       syncFullHistory: false,
-      shouldSyncHistoryMessage: () => false,
       markOnlineOnConnect: false,
       generateHighQualityLinkPreview: false,
       connectTimeoutMs: 60000,
@@ -361,9 +342,7 @@ async function startSubbotConnection(id, sessionDir, phoneNumber = null, onCode 
       clearPairingTimer();
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       updateBotStatus(id, { status: "offline", jid: "" });
-      pendingMessages = [];
-      cleanupSocket(sock);
-      closeDb();
+      try { closeDb(); } catch {}
       sockets.delete(id);
 
       if (statusCode === DisconnectReason.loggedOut) {
@@ -399,8 +378,8 @@ async function startSubbotConnection(id, sessionDir, phoneNumber = null, onCode 
       if (!msg.message) continue;
       if (msg.key?.remoteJid === "status@broadcast") continue;
       if (!connected) {
-        if (pendingMessages.length < 50) pendingMessages.push(msg);
-        continue;
+        pendingMessages.push(msg);
+        return;
       }
       handleMessage(sock, msg, id.toUpperCase()).catch(() => {});
     }
@@ -478,19 +457,14 @@ export function launchAllSubbots() {
 
   if (dirs.length === 0) return;
 
-  const validos = [];
+  log.info(`[MANAGER] Relanzando ${dirs.length} subbot(s)...`);
   for (const id of dirs) {
     const sessionDir = path.resolve(`${SUBBOTS_DIR}/${id}`);
     if (isSessionRegistered(sessionDir)) {
-      validos.push(id);
+      launchSubbot(id);
     } else {
       log.warn(`[MANAGER] ${id} nunca completó vinculación — eliminando sesión huérfana`);
       fs.rmSync(sessionDir, { recursive: true, force: true });
     }
   }
-
-  log.info(`[MANAGER] Relanzando ${validos.length} subbot(s) en lotes de ${BATCH_SIZE}...`);
-  validos.forEach((id, i) => {
-    setTimeout(() => launchSubbot(id), Math.floor(i / BATCH_SIZE) * BATCH_DELAY);
-  });
 }
