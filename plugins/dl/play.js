@@ -1,7 +1,7 @@
 import axios from 'axios'
 import { prepareWAMessageMedia } from '@whiskeysockets/baileys'
 
-const API_URL = 'https://api.alyacore.xyz/dl/ytmp3v2'
+const API_URL = 'https://api.alyacore.xyz/dl/fastytmp3'
 const SEARCH_URL = 'https://api.alyacore.xyz/search/yt'
 const API_KEY = 'Duarte-zz12'
 const LONG_AUDIO_SECONDS = 1800
@@ -13,7 +13,7 @@ const MEDIA_OPTS = {
 }
 
 const pedirDescarga = (url) => {
-  const p = axios.get(API_URL, { params: { url, apikey: API_KEY }, timeout: 60000 }).then(r => r.data)
+  const p = axios.get(API_URL, { params: { url, key: API_KEY }, timeout: 60000 }).then(r => r.data)
   p.catch(() => {})
   return p
 }
