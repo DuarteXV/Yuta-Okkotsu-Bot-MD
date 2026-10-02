@@ -1,6 +1,10 @@
 import makeWASocket, {
   DisconnectReason,
   makeCacheableSignalKeyStore,
+  fetchLatestBaileysVersion,
+  initAuthCreds,
+  BufferJSON,
+  proto,
 } from "@whiskeysockets/baileys";
 import pino from "pino";
 import { mkdir } from "fs/promises";
@@ -12,15 +16,6 @@ import qrcode from "qrcode-terminal";
 import { log } from "./logger.js";
 import config from "../config.js";
 import { handleMessage, invalidateGroupCache } from "./messageHandler.js";
-import {
-  useSQLiteAuthState,
-  getWAVersion,
-  cleanupSocket,
-  registerMainBot,
-} from "./subbotManager.js";
-
-// Se re-exporta por si otro archivo lo importa desde aquí
-export { useSQLiteAuthState };
 
 function question(prompt) {
   const rl = readline.createInterface({
@@ -35,7 +30,63 @@ function question(prompt) {
   });
 }
 
-// Solo se usa cuando la sesión está corrupta (badSession)
+export async function useSQLiteAuthState(sessionDir) {
+  if (!fs.existsSync(sessionDir)) {
+    fs.mkdirSync(sessionDir, { recursive: true });
+  }
+
+  const authDb = new Database(path.join(sessionDir, "auth.db"));
+  authDb.pragma("journal_mode = WAL");
+  authDb.exec(`CREATE TABLE IF NOT EXISTS auth (id TEXT PRIMARY KEY, data TEXT)`);
+
+  const readData = (id) => {
+    const row = authDb.prepare("SELECT data FROM auth WHERE id = ?").get(id);
+    return row ? JSON.parse(row.data, BufferJSON.reviver) : null;
+  };
+
+  const writeData = (data, id) => {
+    authDb
+      .prepare("INSERT OR REPLACE INTO auth (id, data) VALUES (?, ?)")
+      .run(id, JSON.stringify(data, BufferJSON.replacer));
+  };
+
+  const removeData = (id) => authDb.prepare("DELETE FROM auth WHERE id = ?").run(id);
+
+  let creds = readData("creds") || initAuthCreds();
+
+  return {
+    state: {
+      creds,
+      keys: {
+        get: async (type, ids) => {
+          const data = {};
+          ids.forEach((id) => {
+            let value = readData(`${type}-${id}`);
+            if (type === "app-state-sync-key" && value) {
+              value = proto.Message.AppStateSyncKeyData.fromObject(value);
+            }
+            data[id] = value;
+          });
+          return data;
+        },
+        set: async (data) => {
+          for (const cat in data) {
+            for (const id in data[cat]) {
+              const val = data[cat][id];
+              if (val) {
+                writeData(val, `${cat}-${id}`);
+              } else {
+                removeData(`${cat}-${id}`);
+              }
+            }
+          }
+        },
+      },
+    },
+    saveCreds: () => writeData(creds, "creds"),
+  };
+}
+
 export async function clearSocketFiles(sessionDir) {
   try {
     const dbPath = path.join(sessionDir, "auth.db");
@@ -61,17 +112,16 @@ export async function createConnection({
 } = {}) {
   await mkdir(sessionDir, { recursive: true });
 
-  // Contador local: se reinicia en 0 cuando la conexión abre bien
-  let attempt = _attempt;
-
-  if (attempt > 0) {
-    const delay = Math.min(config.reconnectDelay * attempt, 30000);
+  if (_attempt > 0) {
+    log.warn(`[${botLabel}] Limpiando base de datos de sockets antes de reconectar...`);
+    await clearSocketFiles(sessionDir);
+    const delay = Math.min(config.reconnectDelay * _attempt, 30000);
     log.info(`[${botLabel}] Esperando ${delay / 1000}s para reconectar...`);
     await new Promise((r) => setTimeout(r, delay));
   }
 
-  const { state, saveCreds, closeDb } = useSQLiteAuthState(sessionDir);
-  const version = await getWAVersion();
+  const { state, saveCreds } = await useSQLiteAuthState(sessionDir);
+  const { version } = await fetchLatestBaileysVersion();
 
   let useCode = false;
   let phone = phoneNumber;
@@ -107,7 +157,7 @@ export async function createConnection({
   let pendingMessages = [];
 
   const msgStore = new Map();
-  const MAX_STORE_SIZE = 100;
+  const MAX_STORE_SIZE = 500;
 
   function cacheMessage(msg) {
     if (!msg?.key?.id) return;
@@ -146,9 +196,8 @@ export async function createConnection({
       logger: pino({ level: "silent" }),
       browser: useCode ? ["Ubuntu", "Chrome", "20.0.04"] : ["YutaBot", "Chrome", "1.0.0"],
       syncFullHistory: false,
-      shouldSyncHistoryMessage: () => false,
       markOnlineOnConnect: false,
-      generateHighQualityLinkPreview: false,
+      generateHighQualityLinkPreview: true,
       connectTimeoutMs: 60000,
       keepAliveIntervalMs: 25000,
       retryRequestDelayMs: 3000,
@@ -161,9 +210,8 @@ export async function createConnection({
     });
   } catch (e) {
     log.error(`[${botLabel}] Error al crear socket: ${e.message}`);
-    closeDb();
-    if (attempt < config.maxReconnectAttempts) {
-      return createConnection({ sessionDir, botLabel, isSubbot, phoneNumber, _attempt: attempt + 1 });
+    if (_attempt < config.maxReconnectAttempts) {
+      return createConnection({ sessionDir, botLabel, isSubbot, phoneNumber, _attempt: _attempt + 1 });
     }
     return;
   }
@@ -205,26 +253,17 @@ export async function createConnection({
     if (connection === "open") {
       clearConnTimeout();
       connected = true;
-      attempt = 0;
       log.ok(`[${botLabel}] ✅ Conectado → ${sock.user?.id}`);
-      if (!isSubbot) registerMainBot(sock, botLabel);
       await flushPending();
     }
 
     if (connection === "close") {
       clearConnTimeout();
       connected = false;
-      pendingMessages = [];
-
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const errorMsg = lastDisconnect?.error?.message || "Desconocido";
 
       log.warn(`[${botLabel}] ❌ Conexión cerrada → código: ${statusCode} | ${errorMsg}`);
-
-      // Liberar el socket viejo antes de reconectar
-      cleanupSocket(sock);
-      closeDb();
-      msgStore.clear();
 
       if (statusCode === DisconnectReason.loggedOut) {
         log.error(`[${botLabel}] Sesión cerrada (loggedOut). Elimina el archivo "auth.db" dentro de la carpeta "${path.basename(sessionDir)}" y reinicia.`);
@@ -241,9 +280,9 @@ export async function createConnection({
         await clearSocketFiles(sessionDir);
       }
 
-      if (attempt < config.maxReconnectAttempts) {
-        log.info(`[${botLabel}] Reconectando (intento ${attempt + 1}/${config.maxReconnectAttempts})...`);
-        createConnection({ sessionDir, botLabel, isSubbot, phoneNumber, _attempt: attempt + 1 });
+      if (_attempt < config.maxReconnectAttempts) {
+        log.info(`[${botLabel}] Reconectando (intento ${_attempt + 1}/${config.maxReconnectAttempts})...`);
+        createConnection({ sessionDir, botLabel, isSubbot, phoneNumber, _attempt: _attempt + 1 });
       } else {
         log.error(`[${botLabel}] Se agotaron los intentos de reconexión.`);
       }
@@ -274,8 +313,8 @@ export async function createConnection({
       cacheMessage(msg);
 
       if (!connected) {
-        if (pendingMessages.length < 50) pendingMessages.push({ msg, label: botLabel });
-        continue;
+        pendingMessages.push({ msg, label: botLabel });
+        return;
       }
 
       handleMessage(sock, msg, botLabel).catch((e) =>
