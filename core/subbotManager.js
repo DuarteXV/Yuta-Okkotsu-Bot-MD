@@ -13,7 +13,7 @@ import pino from "pino";
 import { mkdir } from "fs/promises";
 import { log } from "./logger.js";
 import { db } from "../database/db.js";
-import { handleMessage } from "./messageHandler.js";
+import { handleMessage, registerGroupCacheEvents } from "./messageHandler.js";
 
 const SUBBOTS_DIR = "./sessions/subbots";
 if (!fs.existsSync(SUBBOTS_DIR)) fs.mkdirSync(SUBBOTS_DIR, { recursive: true });
@@ -296,6 +296,7 @@ async function startSubbotConnection(id, sessionDir, phoneNumber = null, onCode 
   }
 
   sockets.set(id, { sock, closeDb });
+  registerGroupCacheEvents(sock);
 
   if (useCode) {
     await new Promise((r) => setTimeout(r, 3000));
