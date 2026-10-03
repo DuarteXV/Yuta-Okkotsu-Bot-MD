@@ -1,11 +1,11 @@
-import { db } from "../database/db.js";
-import { claimOnce, getAllSockets } from "../core/subbotManager.js";
+import { db } from "../../database/db.js";
+import { claimOnce, getAllSockets } from "../../core/subbotManager.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const numOf = (jid = "") => jid.split("@")[0].split(":")[0];
 
 export default {
-  name: ["difundir", "bc", "broadcast"],
+  name: ["bc", "difundir", "broadcast"],
   description: "Envía un mensaje a todos los grupos donde haya bots",
   category: "owner",
   ownerOnly: true,
@@ -43,8 +43,8 @@ export default {
 
       const primary = db.getPrimary(gid);
       const emisor = primary
-        ? botsEnGrupo.get(primary) ?? null        // primario (si no está conectado, se omite)
-        : [...botsEnGrupo.values()][0];           // sin primario: el bot que esté ahí
+        ? botsEnGrupo.get(primary) ?? null   // con primario: solo ese (si no está conectado, se omite)
+        : [...botsEnGrupo.values()][0];      // sin primario: el bot que esté ahí
 
       if (!emisor) { skip++; continue; }
 
