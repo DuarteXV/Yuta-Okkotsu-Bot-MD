@@ -15,7 +15,7 @@ import fs from "fs";
 import qrcode from "qrcode-terminal";
 import { log } from "./logger.js";
 import config from "../config.js";
-import { handleMessage, invalidateGroupCache } from "./messageHandler.js";
+import { handleMessage, registerGroupCacheEvents } from "./messageHandler.js";
 
 function question(prompt) {
   const rl = readline.createInterface({
@@ -299,9 +299,7 @@ export async function createConnection({
 
   sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("group-participants.update", ({ id }) => {
-    invalidateGroupCache(id);
-  });
+  registerGroupCacheEvents(sock);
 
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
