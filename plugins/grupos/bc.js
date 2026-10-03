@@ -1,5 +1,5 @@
 import { db } from "../database/db.js";
-import { claimOnce, getAllSockets } from "../lib/subbotManager.js"; // ajusta la ruta
+import { claimOnce, getAllSockets } from "../src/subbotManager.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const numOf = (jid = "") => jid.split("@")[0].split(":")[0];
