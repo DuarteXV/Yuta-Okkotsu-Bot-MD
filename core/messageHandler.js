@@ -5,7 +5,8 @@ import { db } from "../database/db.js";
 import { checkAntilink } from "./antilink.js";
 import { handleChatXp, handleCommandXp } from "./xp.js";
 
-const groupCache = new Map();
+const GROUP_TTL = 10 * 60 * 1000;
+const groupCache = new Map(); // jid -> { meta, exp }
 const prefixes = Array.isArray(config.prefix) ? config.prefix : [config.prefix];
 
 // Cache de LID de owners/co-owners: se resuelve una sola vez por número,
@@ -14,6 +15,14 @@ const configuredLidCache = new Map();
 
 export function invalidateGroupCache(groupJid) {
   groupCache.delete(groupJid);
+}
+
+// Registrar en cada socket (principal y subbots)
+export function registerGroupCacheEvents(sock) {
+  sock.ev.on("group-participants.update", ({ id }) => invalidateGroupCache(id));
+  sock.ev.on("groups.update", (updates) => {
+    for (const u of updates) if (u?.id) invalidateGroupCache(u.id);
+  });
 }
 
 function cleanJid(jid = "") {
@@ -134,19 +143,22 @@ export async function handleMessage(sock, rawMsg, botLabel = "MAIN", mainBotNum 
     const args = isCmd ? afterPrefix.slice(cmdName.length).trim().split(/\s+/).filter(Boolean) : [];
     const text = args.join(" ");
 
+    const plugins = getPlugins();
+    const plugin = isCmd ? plugins.get(cmdName) : null;
+
     let groupName = "";
     let groupMeta = null;
 
     if (isGroup) {
-      if (groupCache.has(from)) {
-        groupMeta = groupCache.get(from);
+      const cached = groupCache.get(from);
+      if (cached && cached.exp > Date.now()) {
+        groupMeta = cached.meta;
         groupName = groupMeta?.subject || from;
       } else {
         try {
           groupMeta = await sock.groupMetadata(from);
           groupName = groupMeta?.subject || from;
-          groupCache.set(from, groupMeta);
-          setTimeout(() => groupCache.delete(from), 10 * 60 * 1000);
+          groupCache.set(from, { meta: groupMeta, exp: Date.now() + GROUP_TTL });
         } catch {
           groupName = from;
         }
@@ -156,6 +168,15 @@ export async function handleMessage(sock, rawMsg, botLabel = "MAIN", mainBotNum 
       if (primaryBot && cmdName !== "delprimary" && cmdName !== "setprimary") {
         const myId = botJid.split("@")[0];
         if (primaryBot !== myId) return;
+      }
+
+      // Comandos que dependen de admins: datos frescos siempre
+      if (isCmd && (plugin?.adminOnly || plugin?.botAdmin)) {
+        try {
+          groupMeta = await sock.groupMetadata(from);
+          groupName = groupMeta?.subject || from;
+          groupCache.set(from, { meta: groupMeta, exp: Date.now() + GROUP_TTL });
+        } catch {}
       }
     }
 
@@ -230,9 +251,6 @@ export async function handleMessage(sock, rawMsg, botLabel = "MAIN", mainBotNum 
     log.message({ from, sender, isGroup, groupName, body, isCmd, cmdName, botLabel, msgTypeLabel });
 
     if (!isCmd) return;
-
-    const plugins = getPlugins();
-    const plugin = plugins.get(cmdName);
 
     if (!plugin) {
       return await sock.sendMessage(from, {
