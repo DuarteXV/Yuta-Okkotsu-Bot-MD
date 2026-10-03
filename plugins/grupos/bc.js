@@ -13,8 +13,6 @@ export default {
 
   async run({ sock, from, msg, reply, text }) {
     if (!text) return reply({ text: "⚠️ Escribe el mensaje.\nEj: `.bc Hola a todos`" });
-
-    // Si varios bots escucharon el comando, solo uno lo ejecuta
     if (!claimOnce(`bc:${msg.key.id}`)) return;
 
     const sent = await reply({ text: "📢 `difusión`\n> ⏤͟͟͞͞⊱☕︎ *estado:* reuniendo bots..." });
@@ -22,7 +20,7 @@ export default {
 
     const bots = getAllSockets().filter((b) => b?.user);
 
-    // 1) Todos los bots listan sus grupos al mismo tiempo
+    // 1) Todos los bots listan sus grupos a la vez
     const listas = await Promise.allSettled(
       bots.map(async (bot) => ({
         bot,
@@ -30,8 +28,7 @@ export default {
       }))
     );
 
-    // groupId -> Map(numeroBot -> socket)
-    const grupos = new Map();
+    const grupos = new Map(); // gid -> Map(numeroBot -> socket)
     for (const r of listas) {
       if (r.status !== "fulfilled") continue;
       const { bot, grupos: gs } = r.value;
@@ -41,15 +38,27 @@ export default {
       }
     }
 
-    // 2) Decide quién manda en cada grupo y arma la cola de cada bot
-    const colas = new Map(); // bot -> [gid, ...]
+    // 2) Reparto: primario si hay, si no el bot con menos carga
+    const colas = new Map();
     let skip = 0;
-    for (const [gid, botsEnGrupo] of grupos) {
+    const orden = [...grupos].sort((a, b) => a[1].size - b[1].size);
+
+    for (const [gid, botsEnGrupo] of orden) {
       if (gid === from) { skip++; continue; }
+
       const primary = db.getPrimary(gid);
-      const emisor = primary
-        ? botsEnGrupo.get(primary) ?? null   // con primario: solo ese
-        : [...botsEnGrupo.values()][0];      // sin primario: el bot que esté ahí
+      let emisor = null;
+
+      if (primary) {
+        emisor = botsEnGrupo.get(primary) ?? null;
+      } else {
+        let min = Infinity;
+        for (const b of botsEnGrupo.values()) {
+          const carga = colas.get(b)?.length ?? 0;
+          if (carga < min) { min = carga; emisor = b; }
+        }
+      }
+
       if (!emisor) { skip++; continue; }
       if (!colas.has(emisor)) colas.set(emisor, []);
       colas.get(emisor).push(gid);
@@ -60,13 +69,13 @@ export default {
 
     await edit(`📢 \`difusión\`\n> ⏤͟͟͞͞⊱☕︎ *enviando:* 0/${total} (${colas.size} bots)`);
 
-    // 3) Todos los bots mandan a la vez, cada uno con su propio ritmo
+    // 3) Todos los bots mandan al mismo tiempo
     await Promise.all(
       [...colas].map(async ([bot, cola]) => {
         for (const gid of cola) {
           try { await bot.sendMessage(gid, { text }); ok++; } catch { fail++; }
           hechos++;
-          if (hechos % 10 === 0) {
+          if (hechos % 25 === 0) {
             edit(`📢 \`difusión\`\n> ⏤͟͟͞͞⊱☕︎ *progreso:* ${hechos}/${total}`).catch(() => {});
           }
           await sleep(2000 + Math.random() * 2000);
