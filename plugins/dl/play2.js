@@ -1,23 +1,11 @@
 import axios from 'axios'
 import yts from 'yt-search'
-import { AIRich } from '@whiskeysockets/baileys'
 
 const LIMIT_MB = 80
 const LONG_VIDEO_SECONDS = 1200 // sin peso conocido, más de 20 min va como documento
 const ID_RE = /(?:youtu\.be\/|v=|shorts\/)([\w-]{11})/
 
 const APIS = [
-  {
-    name: 'lempi',
-    endpoint: 'https://api.lempi.lat/dl/ytv',
-    apikey: 'Duarte-1311-2026',
-    tries: 3,
-    timeout: 30000,
-    parse: data =>
-      data?.status && data?.datos?.url
-        ? { url: data.datos.url, title: data.titulo }
-        : null
-  },
   {
     name: 'alyacore',
     endpoint: 'https://api.alyacore.xyz/dl/ytmp4v2',
@@ -78,23 +66,11 @@ export default {
       const info = id ? await yts({ videoId: id }).catch(() => null) : (await yts(text)).videos[0]
       if (!info && !id) return reply({ text: '❌ Sin resultados' })
 
-      const thumbnail = info?.thumbnail ?? info?.image
-
-      const rich = new AIRich(sock)
-       // .setTitle('© Downloaded With Yuta')
-        .addVideo(
-          { url: '', thumbnail },
-          { autoFill: false, status: 'GENERATING', estimatedTime: 60000, id: 'media' }
-        )
-
-      await rich.send(from, { quoted: msg })
-
       const data = await fetchData(info?.url ?? text)
 
       if (!data) {
-        rich.addText('❌ Error API', { replace: 'media' })
-        await rich.sendEdit()
-        return react('❌')
+        await react('❌')
+        return reply({ text: '❌ Error API' })
       }
 
       const mp4 = data.url
@@ -110,25 +86,26 @@ export default {
         : (info?.seconds || 0) > LONG_VIDEO_SECONDS
 
       if (asDocument) {
-        rich.addText(caption, { replace: 'media' })
-        await rich.sendEdit()
         await sock.sendMessage(
           from,
           {
             document: { url: mp4 },
             mimetype: 'video/mp4',
             fileName: `${cleanFileName(title)}.mp4`,
-            caption: `> ${title}`
+            caption
           },
           { quoted: msg }
         )
       } else {
-        rich.addVideo(
-          { url: mp4, file_length: size || undefined, duration: info?.seconds, thumbnail },
-          { replace: 'media', autoFill: !info }
+        await sock.sendMessage(
+          from,
+          {
+            video: { url: mp4 },
+            mimetype: 'video/mp4',
+            caption
+          },
+          { quoted: msg }
         )
-        rich.addText(caption)
-        await rich.sendEdit()
       }
 
       await react('✅')
