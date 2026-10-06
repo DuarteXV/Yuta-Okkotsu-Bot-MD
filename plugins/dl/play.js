@@ -138,7 +138,7 @@ export default {
           audio: { url: dl },
           mimetype: 'audio/mpeg',
           fileName,
-          ptt: false
+          ptt: true
         }, { quoted: msg, ...MEDIA_OPTS })
       }
 
