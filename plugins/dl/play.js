@@ -4,6 +4,7 @@ import { prepareWAMessageMedia } from '@whiskeysockets/baileys'
 const API_URL = 'https://api.alyacore.xyz/dl/fastytmp3'
 const SEARCH_URL = 'https://api.alyacore.xyz/search/yt'
 const API_KEY = 'Duarte-zz12'
+const LIMIT_MB = 80
 const LONG_AUDIO_SECONDS = 1800
 const ID_RE = /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/|v\/))([\w-]{11})/
 
@@ -57,6 +58,15 @@ async function buildLinkPreview(sock, imagen, title, description, url) {
     }
   } catch {
     return undefined
+  }
+}
+
+const getSize = async url => {
+  try {
+    const head = await axios.head(url, { timeout: 4000, maxRedirects: 5 })
+    return Number(head.headers['content-length']) || 0
+  } catch {
+    return 0
   }
 }
 
@@ -124,21 +134,28 @@ export default {
       }
 
       const fileName = `${cleanFileName(resDl?.data?.title || title)}.mp3`
-      const isLong = (info?.seconds || 0) > LONG_AUDIO_SECONDS
 
-      if (isLong) {
+      const size = await getSize(dl)
+      const sizeMB = size / 1024 / 1024
+
+      // Con peso conocido usa el límite de 80 MB; si no, cae a la duración
+      const asDocument = size
+        ? sizeMB >= LIMIT_MB
+        : (info?.seconds || 0) > LONG_AUDIO_SECONDS
+
+      if (asDocument) {
         await sock.sendMessage(from, {
           document: { url: dl },
           mimetype: 'audio/mpeg',
           fileName,
-          caption: '⛧ audio enviado como documento por duración'
+          caption: '⛧ audio enviado como documento por peso'
         }, { quoted: msg, ...MEDIA_OPTS })
       } else {
         await sock.sendMessage(from, {
           audio: { url: dl },
           mimetype: 'audio/mpeg',
           fileName,
-          ptt: true
+          ptt: false
         }, { quoted: msg, ...MEDIA_OPTS })
       }
 
