@@ -1,4 +1,4 @@
-Function parseMention(text = '') {
+function parseMention(text = '') {
     return [...text.matchAll(/@([0-9]{5,16}|0)/g)].map(v => v[1] + '@s.whatsapp.net')
 }
 
@@ -82,9 +82,9 @@ ${verificado}
                 const participantes = info.size ?? info.participants?.length ?? 'No disponible'
                 const tipo = info.isCommunity ? '🏘️ Comunidad' : '👥 Grupo'
 
-                // Obtener creador (si la API lo retorna)
+                // Obtener creador
                 const creadorJid = info.owner
-                const creador = creadorJid ? `@${creadorJid.split('@')[0]}` : 'No disponible / Salío del grupo'
+                const creador = creadorJid ? `@${creadorJid.split('@')[0]}` : 'No disponible / Salió del grupo'
 
                 const creacion = info.creation
                     ? new Date(info.creation * 1000).toLocaleDateString('es-ES')
