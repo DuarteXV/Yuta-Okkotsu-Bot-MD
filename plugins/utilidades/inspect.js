@@ -1,5 +1,13 @@
-function parseMention(text = '') {
-    return [...text.matchAll(/@([0-9]{5,16}|0)/g)].map(v => v[1] + '@s.whatsapp.net')
+async function resolverJid(sock, jid) {
+    if (!jid) return null
+    if (!jid.endsWith('@lid')) {
+        return jid.split(':')[0].split('@')[0] + '@s.whatsapp.net'
+    }
+    try {
+        const pn = await sock.signalRepository?.lidMapping?.getPNForLID(jid)
+        if (pn) return pn.split(':')[0].split('@')[0] + '@s.whatsapp.net'
+    } catch {}
+    return jid // no se pudo resolver: se queda como LID (WhatsApp lo muestra con nombre al mencionarlo)
 }
 
 export default {
@@ -8,9 +16,6 @@ export default {
     category: 'herramientas',
 
     async run({ sock, from, msg, text, reply }) {
-        let md = 'https://github.com/DuarteXV'
-        let icons = 'https://raw.githubusercontent.com/danielalejandrobasado-glitch/Yotsuba-MD-Premium/main/uploads/91ea84fc3ce47e5a.jpg'
-
         const sender = msg.key.participant || msg.key.remoteJid
 
         let fkontak = {
@@ -30,11 +35,11 @@ export default {
 
         if (!text) return await reply({ text: '```ⓘ Ingrese un enlace de grupo, comunidad o canal.```' })
 
-        // Detectar tipo de enlace
         const groupUrl = text.match(/(?:https?:\/\/)?(?:chat\.whatsapp\.com\/)([0-9A-Za-z]{22,24})/i)?.[1]
         const channelUrl = text.match(/(?:https?:\/\/)?(?:whatsapp\.com\/channel\/)([0-9A-Za-z@.]+)/i)?.[1]
 
         let caption = ''
+        let mentions = []
 
         // ─── CANAL ───
         if (channelUrl) {
@@ -80,20 +85,22 @@ ${verificado}
                 const nombre = info.subject || 'Sin nombre'
                 const descripcion = info.desc || 'Sin descripción'
                 const participantes = info.size ?? info.participants?.length ?? 'No disponible'
-                const tipo = info.isCommunity ? '🏘️ Comunidad' : '👥 Grupo'
+                const esComunidad = !!info.isCommunity
 
-                // Obtener creador
-                const creadorJid = info.owner
-                const creador = creadorJid ? `@${creadorJid.split('@')[0]}` : 'No disponible / Salió del grupo'
+                // Creador (arreglo LID): prioriza ownerPn, si no, resuelve el LID
+                const creadorJid = await resolverJid(sock, info.ownerPn || info.owner)
+                let creador = 'No disponible / Salió del grupo'
+                if (creadorJid) {
+                    creador = `@${creadorJid.split('@')[0]}`
+                    mentions.push(creadorJid)
+                }
 
                 const creacion = info.creation
                     ? new Date(info.creation * 1000).toLocaleDateString('es-ES')
                     : 'No disponible'
 
                 caption =
-`${tipo === '🏘️ Comunidad'
-? '🏘️ *INFORMACIÓN DE LA COMUNIDAD*'
-: '👥 *INFORMACIÓN DEL GRUPO*'}
+`${esComunidad ? '🏘️ *INFORMACIÓN DE LA COMUNIDAD*' : '👥 *INFORMACIÓN DEL GRUPO*'}
 
 📛 *Nombre:* ${nombre}
 🆔 *ID:* ${id}
@@ -111,12 +118,9 @@ ${verificado}
             return await reply({ text: `❌ No se detectó un enlace válido de grupo, comunidad o canal de WhatsApp.` })
         }
 
-        // ─── ENVIAR RESULTADO ───
         await sock.sendMessage(from, {
             text: caption,
-            contextInfo: {
-                mentionedJid: parseMention(caption)
-            }
+            contextInfo: { mentionedJid: mentions }
         }, { quoted: fkontak })
     }
 }
