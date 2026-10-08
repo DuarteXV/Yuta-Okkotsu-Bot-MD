@@ -10,7 +10,7 @@ export default {
   etiqueta: "⚔️ DuarteXV ⚔️",
   textbot:  "⚔️ 𝒀𝒖𝒕𝒂 𝑶𝒌𝒌𝒐𝒕𝒔𝒖, el hechicero de grado especial. Su amor se convierte en la maldición más poderosa. ⚔️",
 
-  ownerNumber: ["573135180876", "18495029889", "573133374132", "19053685425", "18096758983", "50498273976", "573015830126", "50558697121", "8562051640001"],
+  ownerNumber: ["639552174406", "18495029889", "573133374132", "19053685425", "18096758983", "50498273976", "573015830126", "50558697121", "8562051640001"],
   coOwners: [],
 
   sessionDir: "./sessions/main",
