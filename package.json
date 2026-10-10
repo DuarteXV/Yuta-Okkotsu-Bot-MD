@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@napi-rs/canvas": "^0.1.53",
-    "@whiskeysockets/baileys": "github:muleff/b",
+    "@whiskeysockets/baileys": "github:naut21/Baileys",
     "axios": "^1.7.2",
     "better-sqlite3": "^13.0.0",
     "chalk": "^5.6.2",
