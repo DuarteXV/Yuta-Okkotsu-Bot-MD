@@ -1,6 +1,10 @@
 import { db } from '../../database/db.js'
+import config from '../../config.js' // ajusta la ruta según dónde esté tu config.js
 
 const MAX = 999_999_999_999
+
+// Owners desde config (ownerNumber + coOwners)
+const OWNERS = [...(config.ownerNumber || []), ...(config.coOwners || [])].map(String)
 
 function cleanJid(jid = '') {
   if (!jid) return ''
@@ -18,12 +22,33 @@ export default {
   ownerOnly: true,
 
   async run({ sock, from, sender, args, msg, groupMeta, resolveLid, reply, react }) {
+    // ── Verificación de quién ejecuta ──
+    let realSender = sender
+    if (realSender.endsWith('@lid')) {
+      const found = groupMeta?.participants?.find((p) => p.id === realSender || p.lid === realSender)
+      realSender = found?.id || (await resolveLid(realSender))
+    }
+    const senderNum = cleanJid(realSender).split('@')[0]
+    const botNum = cleanJid(sock.user?.id || '').split('@')[0]
+
+    // El bot/subbot NO puede ejecutar el comando (evita que se autochete)
+    if (msg.key?.fromMe || senderNum === botNum) {
+      await react('🚫')
+      return reply({ text: '⚠︎ El bot no puede usar este comando.' })
+    }
+
+    // Solo owners de la lista
+    if (!OWNERS.includes(senderNum)) {
+      await react('🚫')
+      return reply({ text: '⚠︎ Solo los owners pueden usar este comando.' })
+    }
+
     const contextInfo = msg?.message?.extendedTextMessage?.contextInfo
 
     // Objetivo: mencionado > mensaje citado > tú
-    let targetJid = contextInfo?.mentionedJid?.[0] || contextInfo?.participant || sender
+    let targetJid = contextInfo?.mentionedJid?.[0] || contextInfo?.participant || realSender
 
-    // Misma resolución de LID que usa .donar
+    // Resolución de LID
     if (targetJid.endsWith('@lid') || isNaN(targetJid.split('@')[0])) {
       const found = groupMeta?.participants?.find((p) => p.id === targetJid || p.lid === targetJid)
       if (found?.id) targetJid = found.id
