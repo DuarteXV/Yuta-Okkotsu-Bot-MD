@@ -39,7 +39,7 @@ export default {
 
     if (!text && !quoted?.stanzaId) {
       return await reply({
-        text: "꒰✖️꒱  ᰍ Escrıᑲᧉ ᧉƖ motivo ძᧉ𝗅 ꭇᧉpoꭇƚᧉ o ꭇᧉsponძᧉ ⍺ un mᧉns⍺jᧉ.\n\n`✎..Ejemplo:` *.report* el usuario me está enviando spam"
+        text: "꒰✖️꒱  ᰍ Escrıᑲᧉ ᧉƖ motivo ძᧉ𝗅 ꭇᧉpoꭇƚᧉ o ꭇᧉsponძᧉ ⍺ un mᧉns⍺jᧉ.\n\n`✎..Ejemplo:` *.report* el bot no le funciona el comando play"
       })
     }
 
