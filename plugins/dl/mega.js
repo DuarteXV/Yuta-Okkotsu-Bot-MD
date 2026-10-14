@@ -15,6 +15,10 @@ const MIMES = {
 };
 
 const ERRORES = {
+  [-3]: "MEGA está ocupado, intenta de nuevo en un momento.",
+  [-4]: "MEGA te está limitando por demasiadas peticiones. Espera unos minutos.",
+  [-6]: "MEGA bloqueó temporalmente la IP de este servidor (demasiadas conexiones). Espera un rato o prueba desde otra IP.",
+  [-19]: "Demasiadas conexiones simultáneas a MEGA. Espera un momento.",
   [-9]: "El archivo no existe o fue eliminado.",
   [-16]: "El archivo fue bloqueado por MEGA (términos de servicio).",
   [-17]: "MEGA limitó el ancho de banda de este servidor. Intenta más tarde.",
@@ -43,7 +47,10 @@ function derivarClaves(keyB64) {
 }
 
 /** Pide a la API de MEGA la URL de descarga, el tamaño y el nombre cifrado */
-async function infoArchivo(id) {
+const TEMPORALES = new Set([-3, -4, -6, -19]);
+const espera = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function infoArchivo(id, intento = 1) {
   const res = await fetch(`${API}?id=${Date.now() % 1e9}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -54,7 +61,15 @@ async function infoArchivo(id) {
 
   const json = await res.json();
   const data = Array.isArray(json) ? json[0] : json;
-  if (typeof data === "number") throw new Error(ERRORES[data] || `MEGA devolvió el error ${data}.`);
+
+  if (typeof data === "number") {
+    // Errores temporales: reintenta con espera creciente (2 s, 4 s, 8 s)
+    if (TEMPORALES.has(data) && intento <= 3) {
+      await espera(2000 * 2 ** (intento - 1));
+      return infoArchivo(id, intento + 1);
+    }
+    throw new Error(ERRORES[data] || `MEGA devolvió el error ${data}.`);
+  }
   if (!data?.g) throw new Error("MEGA no devolvió enlace de descarga.");
   return data; // { g: url, s: tamaño, at: atributos cifrados }
 }
