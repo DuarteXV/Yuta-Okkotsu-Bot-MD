@@ -6,7 +6,7 @@ const API_BASE = 'https://cnv.cx/v2'
 const SEARCH_URL = 'https://api.alyacore.xyz/search/yt'
 const API_KEY = 'Duarte-zz12'
 const LIMIT_MB = 80
-const UA = 'Mozilla/5.0 (Linux; Android 11; moto g(9) play Build/RPXS31.Q2-58-17-7-3; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/155.0.8059.43 Mobile Safari/537.36'
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 const ID_RE = /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/|v\/))([\w-]{11})/
 
 const MEDIA_OPTS = {
@@ -33,7 +33,6 @@ async function obtenerKey(videoId) {
   return data.key
 }
 
-// OJO: el endpoint /converter y el header "key" son asumidos, ajustalos si tu versión original difería
 async function obtenerAudio(videoId) {
   const key = await obtenerKey(videoId)
 
