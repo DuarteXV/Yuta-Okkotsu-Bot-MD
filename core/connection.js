@@ -12,6 +12,7 @@ import path from "path";
 import readline from "readline";
 import Database from "better-sqlite3";
 import fs from "fs";
+import crypto from "crypto";
 import qrcode from "qrcode-terminal";
 import { log } from "./logger.js";
 import config from "../config.js";
@@ -30,24 +31,55 @@ function question(prompt) {
   });
 }
 
+function resolveSessionDir(dir) {
+  if (typeof dir !== "string" || dir.length === 0 || dir.includes("..") || dir.includes("\0")) {
+    throw new Error("Invalid sessionDir path");
+  }
+  return dir;
+}
+
 export async function useSQLiteAuthState(sessionDir) {
+  sessionDir = resolveSessionDir(sessionDir);
   if (!fs.existsSync(sessionDir)) {
     fs.mkdirSync(sessionDir, { recursive: true });
   }
 
-  const authDb = new Database(path.join(sessionDir, "auth.db"));
+  const authDb = new Database(`${sessionDir}/auth.db`);
   authDb.pragma("journal_mode = WAL");
   authDb.exec(`CREATE TABLE IF NOT EXISTS auth (id TEXT PRIMARY KEY, data TEXT)`);
 
+  const keyPath = `${sessionDir}/.authkey`;
+  if (!fs.existsSync(keyPath)) {
+    fs.writeFileSync(keyPath, crypto.randomBytes(32), { mode: 0o600 });
+  }
+  const encKey = fs.readFileSync(keyPath);
+
+  const encrypt = (text) => {
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv("aes-256-gcm", encKey, iv, { authTagLength: 16 });
+    const enc = Buffer.concat([cipher.update(text, "utf8"), cipher.final()]);
+    return Buffer.concat([iv, cipher.getAuthTag(), enc]).toString("base64");
+  };
+
+  const decrypt = (payload) => {
+    const buf = Buffer.from(payload, "base64");
+    const iv = buf.subarray(0, 12);
+    const authTag = buf.subarray(12, 28);
+    const enc = buf.subarray(28);
+    const decipher = crypto.createDecipheriv("aes-256-gcm", encKey, iv, { authTagLength: 16 });
+    decipher.setAuthTag(authTag);
+    return Buffer.concat([decipher.update(enc), decipher.final()]).toString("utf8");
+  };
+
   const readData = (id) => {
     const row = authDb.prepare("SELECT data FROM auth WHERE id = ?").get(id);
-    return row ? JSON.parse(row.data, BufferJSON.reviver) : null;
+    return row ? JSON.parse(decrypt(row.data), BufferJSON.reviver) : null;
   };
 
   const writeData = (data, id) => {
     authDb
       .prepare("INSERT OR REPLACE INTO auth (id, data) VALUES (?, ?)")
-      .run(id, JSON.stringify(data, BufferJSON.replacer));
+      .run(id, encrypt(JSON.stringify(data, BufferJSON.replacer)));
   };
 
   const removeData = (id) => authDb.prepare("DELETE FROM auth WHERE id = ?").run(id);
@@ -89,7 +121,8 @@ export async function useSQLiteAuthState(sessionDir) {
 
 export async function clearSocketFiles(sessionDir) {
   try {
-    const dbPath = path.join(sessionDir, "auth.db");
+    sessionDir = resolveSessionDir(sessionDir);
+    const dbPath = `${sessionDir}/auth.db`;
     if (fs.existsSync(dbPath)) {
       const db = new Database(dbPath);
       const result = db.prepare("DELETE FROM auth WHERE id != 'creds'").run();
@@ -110,6 +143,7 @@ export async function createConnection({
   phoneNumber = null,
   _attempt = 0,
 } = {}) {
+  sessionDir = resolveSessionDir(sessionDir);
   await mkdir(sessionDir, { recursive: true });
 
   if (_attempt > 0) {
