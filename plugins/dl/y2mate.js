@@ -6,7 +6,6 @@ const API_BASE = 'https://cnv.cx/v2'
 const SEARCH_URL = 'https://api.alyacore.xyz/search/yt'
 const API_KEY = 'Duarte-zz12'
 const LIMIT_MB = 80
-const LONG_AUDIO_SECONDS = 1800
 const UA = 'Mozilla/5.0 (Linux; Android 11; moto g(9) play Build/RPXS31.Q2-58-17-7-3; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/155.0.8059.43 Mobile Safari/537.36'
 const ID_RE = /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/|v\/))([\w-]{11})/
 
@@ -15,7 +14,6 @@ const MEDIA_OPTS = {
   mediaUploadTimeoutMs: 1000 * 60 * 60
 }
 
-const toSeconds = t => String(t || '').split(':').reduce((a, v) => a * 60 + (parseInt(v, 10) || 0), 0)
 const toNumber = v => parseInt(String(v || '').replace(/\D/g, ''), 10) || 0
 
 // ===== y2meta: key + túnel de descarga =====
@@ -67,6 +65,24 @@ async function obtenerAudio(videoId) {
   return { url: data.url, filename: data.filename || `${videoId}.mp3` }
 }
 
+// ===== Descarga del túnel con los headers de la página =====
+async function descargarBuffer(url) {
+  const res = await axios.get(url, {
+    responseType: 'arraybuffer',
+    timeout: 0,
+    maxRedirects: 10,
+    maxContentLength: Infinity,
+    maxBodyLength: Infinity,
+    headers: {
+      'User-Agent': UA,
+      'Origin': FRAME_ORIGIN,
+      'Referer': FRAME_ORIGIN + '/',
+      'Accept': '*/*'
+    }
+  })
+  return Buffer.from(res.data)
+}
+
 // ===== Info del video (para el preview) =====
 async function buscarVideo(query, id) {
   try {
@@ -78,7 +94,6 @@ async function buscarVideo(query, id) {
       url: v.url,
       title: v.title,
       timestamp: v.duration,
-      seconds: toSeconds(v.duration),
       views: toNumber(v.views),
       thumbnail: v.banner,
       author: { name: v.autor?.trim() }
@@ -104,15 +119,6 @@ async function buildLinkPreview(sock, imagen, title, description, url) {
     }
   } catch {
     return undefined
-  }
-}
-
-const getSize = async url => {
-  try {
-    const head = await axios.head(url, { timeout: 4000, maxRedirects: 5 })
-    return Number(head.headers['content-length']) || 0
-  } catch {
-    return 0
   }
 }
 
@@ -194,24 +200,19 @@ export default {
 
       const fileName = `${cleanFileName(title !== 'Sin título' ? title : resDl.filename.replace(/\.mp3$/i, ''))}.mp3`
 
-      const size = await getSize(dl)
-      const sizeMB = size / 1024 / 1024
+      const buffer = await descargarBuffer(dl)
+      const sizeMB = buffer.length / 1024 / 1024
 
-      // Con peso conocido usa el límite de 80 MB; si no, cae a la duración
-      const asDocument = size
-        ? sizeMB >= LIMIT_MB
-        : (info?.seconds || 0) > LONG_AUDIO_SECONDS
-
-      if (asDocument) {
+      if (sizeMB >= LIMIT_MB) {
         await sock.sendMessage(from, {
-          document: { url: dl },
+          document: buffer,
           mimetype: 'audio/mpeg',
           fileName,
           caption: '⛧ audio enviado como documento por peso'
         }, { quoted: msg, ...MEDIA_OPTS })
       } else {
         await sock.sendMessage(from, {
-          audio: { url: dl },
+          audio: buffer,
           mimetype: 'audio/mpeg',
           fileName,
           ptt: false
