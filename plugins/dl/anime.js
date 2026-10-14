@@ -4,10 +4,6 @@ const BASE = 'https://animeflv.or.at/'
 const UA =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36'
 
-const MAX_RESULTS = 10
-const MAX_EPISODES = 30
-const MAX_FILE_MB = 80
-
 const sessions = new Map()
 
 const decode = value =>
@@ -15,26 +11,18 @@ const decode = value =>
     /&(#x[\da-f]+|#\d+|[a-z]+);/gi,
     (full, entity) => {
       if (entity.startsWith('#')) {
-        const code = entity[1]?.toLowerCase() === 'x'
+        const n = entity[1]?.toLowerCase() === 'x'
           ? parseInt(entity.slice(2), 16)
           : parseInt(entity.slice(1), 10)
 
-        return Number.isInteger(code) &&
-          code > 0 &&
-          code <= 0x10ffff
-          ? String.fromCodePoint(code)
+        return n > 0 && n <= 0x10ffff
+          ? String.fromCodePoint(n)
           : full
       }
 
       return ({
-        amp: '&',
-        quot: '"',
-        apos: "'",
-        nbsp: ' ',
-        lt: '<',
-        gt: '>',
-        ndash: '–',
-        mdash: '—',
+        amp: '&', quot: '"', apos: "'", nbsp: ' ',
+        lt: '<', gt: '>', ndash: '–', mdash: '—',
         hellip: '…'
       })[entity.toLowerCase()] ?? full
     }
@@ -46,16 +34,12 @@ const clean = html =>
     .replace(/\s+/g, ' ')
     .trim())
 
-const attr = (html, name) => {
-  const match = String(html ?? '').match(
-    new RegExp(
-      `\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`,
-      'i'
-    )
+const attr = (html, name) =>
+  decode(
+    String(html ?? '').match(
+      new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i')
+    )?.slice(1).find(Boolean) ?? ''
   )
-
-  return decode(match?.[1] ?? match?.[2] ?? '')
-}
 
 const element = (html, name, cls) =>
   html.match(
@@ -73,12 +57,9 @@ const tag = (html, name, cls) =>
     )
   )?.[0] ?? ''
 
-const absolute = (input, base = BASE) => {
-  if (!input) return null
-
+const absolute = (value, base = BASE) => {
   try {
-    const url = new URL(decode(input), base)
-
+    const url = new URL(decode(value), base)
     return ['http:', 'https:'].includes(url.protocol)
       ? url.href
       : null
@@ -87,22 +68,14 @@ const absolute = (input, base = BASE) => {
   }
 }
 
-const unique = (items, key = 'url') =>
-  [...new Map(
-    items
-      .filter(item => item[key])
-      .map(item => [item[key], item])
-  ).values()]
+const request = async url => {
+  const target = new URL(url, BASE)
 
-const cleanFileName = name =>
-  String(name)
-    .replace(/[\\/:*?"<>|]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 100) || 'anime'
+  if (target.origin !== new URL(BASE).origin) {
+    throw new Error('URL fuera del sitio configurado.')
+  }
 
-const getPage = async url => {
-  const response = await axios.get(url, {
+  const { data } = await axios.get(target.href, {
     timeout: 20000,
     maxRedirects: 5,
     headers: {
@@ -112,18 +85,18 @@ const getPage = async url => {
     }
   })
 
-  if (typeof response.data !== 'string') {
-    throw new Error('La página no devolvió HTML.')
+  if (typeof data !== 'string' || !/<html\b/i.test(data)) {
+    throw new Error('Respuesta HTML inválida.')
   }
 
-  return response.data
+  return data
 }
 
-const searchAnime = async query => {
+const search = async query => {
   const url = new URL(BASE)
   url.searchParams.set('s', query)
 
-  const html = await getPage(url.href)
+  const html = await request(url.href)
 
   const pattern =
     /<div\b[^>]*class=["'][^"']*\bsearch-series-card\b[^"']*["'][^>]*>\s*<a\b([^>]+)>([\s\S]*?)<\/a>/gi
@@ -132,156 +105,50 @@ const searchAnime = async query => {
     .map(([, link, body]) => ({
       title: clean(element(body, 'h2', 'entry-title')),
       url: absolute(attr(link, 'href')),
-      poster: absolute(
-        attr(tag(body, 'img', 'anime-image'), 'src')
-      )
+      poster: absolute(attr(tag(body, 'img', 'anime-image'), 'src'))
     }))
     .filter(item => item.title && item.url)
 
-  return unique(results)
+  return [...new Map(results.map(item => [item.url, item])).values()]
 }
 
-const parseEpisodes = html => {
+const details = async url => {
+  const html = await request(url)
+  const title = clean(element(html, 'h1', 'anime-title'))
+
+  if (!title) throw new Error('No se encontró la ficha del anime.')
+
   const raw = html.match(
     /<script\b(?=[^>]*\bclass\s*=\s*["'][^"']*\banimeflv-episodes-data\b)[^>]*>([\s\S]*?)<\/script>/i
   )?.[1]
 
-  if (!raw) return []
+  let episodes = []
 
   try {
-    const entries = JSON.parse(raw)
+    const data = JSON.parse(raw || '[]')
 
-    if (!Array.isArray(entries)) return []
-
-    return entries
-      .filter(item =>
-        Number.isFinite(Number(item.number)) &&
-        absolute(item.permalink)
-      )
-      .map(item => ({
-        number: Number(item.number),
-        url: absolute(item.permalink),
-        id: item.post_id ?? null
-      }))
-      .sort((a, b) => a.number - b.number)
-  } catch {
-    return []
-  }
-}
-
-const getDetails = async input => {
-  const url = new URL(input)
-
-  if (url.origin !== new URL(BASE).origin) {
-    throw new Error('La ficha debe pertenecer al sitio configurado.')
-  }
-
-  const html = await getPage(url.href)
-  const title = clean(element(html, 'h1', 'anime-title'))
-
-  if (!title) {
-    throw new Error('No se encontró una ficha de anime.')
-  }
-
-  const synopsis = clean(
-    element(html, 'div', 'anime-synopsis')
-      .replace(/^\s*<h3[^>]*>[\s\S]*?<\/h3>/i, '')
-  )
-
-  const genres = [
-    ...element(html, 'div', 'anime-genres').matchAll(
-      /<span\b[^>]*class=["'][^"']*\bgenre-tag\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/gi
-    )
-  ].map(([, name]) => clean(name))
+    if (Array.isArray(data)) {
+      episodes = data
+        .filter(ep => Number.isFinite(Number(ep.number)) && absolute(ep.permalink))
+        .map(ep => ({
+          number: Number(ep.number),
+          url: absolute(ep.permalink)
+        }))
+        .sort((a, b) => a.number - b.number)
+    }
+  } catch {}
 
   return {
     title,
-    url: url.href,
-    poster: absolute(
-      attr(tag(html, 'img', 'poster-image'), 'src')
-    ),
-    synopsis,
-    rating:
-      Number.parseFloat(
-        clean(element(html, 'div', 'rating-score'))
-      ) || null,
-    genres,
-    episodes: parseEpisodes(html)
+    url,
+    synopsis: clean(element(html, 'div', 'anime-synopsis')),
+    genres: [
+      ...element(html, 'div', 'anime-genres').matchAll(
+        /<span\b[^>]*class=["'][^"']*\bgenre-tag\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/gi
+      )
+    ].map(([, value]) => clean(value)),
+    episodes
   }
-}
-
-// Comprueba si la URL devuelve un vídeo directo.
-// No descarga ni transforma manifiestos de streaming.
-const inspectVideo = async url => {
-  const parsed = new URL(url)
-
-  if (!['http:', 'https:'].includes(parsed.protocol)) {
-    throw new Error('Protocolo no permitido.')
-  }
-
-  const response = await axios.get(parsed.href, {
-    responseType: 'stream',
-    timeout: 15000,
-    maxRedirects: 5,
-    headers: {
-      'user-agent': UA,
-      range: 'bytes=0-0'
-    },
-    validateStatus: status =>
-      status === 200 || status === 206
-  })
-
-  const type = String(
-    response.headers['content-type'] || ''
-  ).toLowerCase()
-
-  const length = Number(
-    response.headers['content-length'] || 0
-  )
-
-  response.data.destroy()
-
-  return {
-    type,
-    size: length,
-    isVideo: type.includes('video/mp4')
-  }
-}
-
-const sendAuthorizedVideo = async ({
-  sock,
-  from,
-  msg,
-  url,
-  title,
-  reply
-}) => {
-  const info = await inspectVideo(url)
-
-  if (!info.isVideo) {
-    return reply({
-      text:
-        'La URL no devolvió un MP4 directo. ' +
-        'Puede ser una página web o un manifiesto de streaming.'
-    })
-  }
-
-  if (info.size && info.size > MAX_FILE_MB * 1024 * 1024) {
-    return reply({
-      text: `El archivo supera el límite configurado de ${MAX_FILE_MB} MB.`
-    })
-  }
-
-  await sock.sendMessage(
-    from,
-    {
-      document: { url },
-      mimetype: 'video/mp4',
-      fileName: `${cleanFileName(title)}.mp4`,
-      caption: `> ${title}`
-    },
-    { quoted: msg }
-  )
 }
 
 export default {
@@ -290,114 +157,70 @@ export default {
   category: 'dl',
   ownerOnly: false,
 
-  async run({ sock, from, msg, react, reply, text }) {
+  async run({ from, react, reply, text }) {
     try {
       const input = String(text || '').trim()
 
       if (!input) {
-        return reply({
-          text:
-            'Uso:\n' +
-            '• .animedl nombre del anime\n' +
-            '• Responde con el número del resultado\n' +
-            '• Después elige un episodio'
-        })
-      }
-
-      // Elegir un resultado o episodio de una búsqueda anterior.
-      const session = sessions.get(from)
-
-      if (session && /^\d+$/.test(input)) {
-        const choice = Number(input) - 1
-
-        if (session.stage === 'results') {
-          const anime = session.items[choice]
-
-          if (!anime) {
-            return reply({ text: 'Número de anime inválido.' })
-          }
-
-          await react('🔎')
-
-          const details = await getDetails(anime.url)
-
-          sessions.set(from, {
-            stage: 'episodes',
-            items: details.episodes,
-            title: details.title
-          })
-
-          const episodes = details.episodes
-            .slice(0, MAX_EPISODES)
-            .map((ep, i) => `${i + 1}. Episodio ${ep.number}`)
-            .join('\n')
-
-          await react('✅')
-
-          return reply({
-            text:
-              `「 ${details.title} 」\n\n` +
-              `${details.synopsis || 'Sin sinopsis disponible.'}\n\n` +
-              `Géneros: ${details.genres.join(', ') || 'N/D'}\n\n` +
-              `${episodes || 'No se encontraron episodios.'}\n\n` +
-              'Responde con el número del episodio.'
-          })
-        }
-
-        if (session.stage === 'episodes') {
-          const ep = session.items[choice]
-
-          if (!ep) {
-            return reply({ text: 'Número de episodio inválido.' })
-          }
-
-          return reply({
-            text:
-              `Episodio ${ep.number}\n${ep.url}\n\n` +
-              'Abre el enlace para consultar las opciones publicadas. ' +
-              'La descarga automática solo se admite para fuentes autorizadas.'
-          })
-        }
+        return reply(
+          'Uso: .animedl nombre del anime\n' +
+          'También puedes consultar una ficha usando su URL.'
+        )
       }
 
       await react('🔍')
 
-      const results = await searchAnime(input)
+      // Si se proporciona una URL de ficha, listar episodios.
+      if (/^https:\/\/animeflv\.or\.at\//i.test(input)) {
+        const data = await details(input)
+
+        sessions.set(from, {
+          stage: 'episodes',
+          title: data.title,
+          items: data.episodes
+        })
+
+        const list = data.episodes.slice(0, 40)
+          .map((ep, i) => `${i + 1}. Episodio ${ep.number}`)
+          .join('\n')
+
+        await react('✅')
+
+        return reply(
+          `「 ${data.title} 」\n\n` +
+          `${data.synopsis || 'Sin sinopsis disponible.'}\n\n` +
+          `Géneros: ${data.genres.join(', ') || 'N/D'}\n\n` +
+          `${list || 'No se encontraron episodios.'}\n\n` +
+          'Usa la URL de un episodio para consultar sus enlaces.'
+        )
+      }
+
+      const results = await search(input)
 
       if (!results.length) {
         await react('❌')
-        return reply({ text: 'No encontré resultados para ese anime.' })
+        return reply('No encontré resultados.')
       }
-
-      const items = results.slice(0, MAX_RESULTS)
 
       sessions.set(from, {
         stage: 'results',
-        items
+        items: results.slice(0, 10)
       })
 
-      const list = items
-        .map((item, i) => `${i + 1}. ${item.title}`)
-        .join('\n')
+      const list = results.slice(0, 10)
+        .map((item, i) => `${i + 1}. ${item.title}\n${item.url}`)
+        .join('\n\n')
 
       await react('✅')
 
-      return reply({
-        text:
-          `「 ANIMEDL 」\n` +
-          `Búsqueda: ${input}\n\n` +
-          `${list}\n\n` +
-          'Responde con el número del anime que quieres consultar.'
-      })
+      return reply(
+        `「 ANIMEDL 」\n\n${list}\n\n` +
+        'Copia la URL de la ficha para ver sus episodios.'
+      )
     } catch (error) {
       console.error('[animedl]', error)
-
       await react('❌')
-
-      return reply({
-        text: `Error: ${error.message || 'No se pudo procesar la solicitud.'}`
-      })
+      return reply(`Error: ${error.message}`)
     }
   }
 }
-Puto gpt no termina la chamba
