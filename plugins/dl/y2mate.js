@@ -3,8 +3,6 @@ import { prepareWAMessageMedia } from '@whiskeysockets/baileys'
 
 const FRAME_ORIGIN = 'https://frame.y2meta-uk.com'
 const API_BASE = 'https://cnv.cx/v2'
-const SEARCH_URL = 'https://api.alyacore.xyz/search/yt'
-const API_KEY = 'Duarte-zz12'
 const LIMIT_MB = 80
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 const ID_RE = /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/|v\/))([\w-]{11})/
@@ -13,8 +11,6 @@ const MEDIA_OPTS = {
   options: { timeout: 0, maxRedirects: 10, maxContentLength: Infinity, maxBodyLength: Infinity, headers: { 'user-agent': 'Mozilla/5.0' } },
   mediaUploadTimeoutMs: 1000 * 60 * 60
 }
-
-const toNumber = v => parseInt(String(v || '').replace(/\D/g, ''), 10) || 0
 
 // ===== y2meta: key + túnel de descarga =====
 async function obtenerKey(videoId) {
@@ -82,20 +78,60 @@ async function descargarBuffer(url) {
   return Buffer.from(res.data)
 }
 
+// ===== Scraper de YouTube (ytsearch) =====
+async function buscarYouTube(query, limite = 5) {
+  const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}&hl=es`
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': UA,
+      'Accept-Language': 'es-ES,es;q=0.9',
+      'Cookie': 'CONSENT=YES+1; SOCS=CAI'
+    }
+  })
+  const html = await res.text()
+
+  const m = html.match(/var ytInitialData\s*=\s*(\{.+?\});<\/script>/s)
+  if (!m) throw new Error('No se pudo leer la página de YouTube')
+
+  const data = JSON.parse(m[1])
+  const secciones =
+    data?.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents || []
+
+  const resultados = []
+  for (const sec of secciones) {
+    for (const item of sec?.itemSectionRenderer?.contents || []) {
+      const v = item.videoRenderer
+      if (!v?.videoId || !v.lengthText) continue // salta en vivo, shorts y anuncios
+
+      resultados.push({
+        id: v.videoId,
+        titulo: v.title?.runs?.[0]?.text || 'Sin título',
+        canal: v.ownerText?.runs?.[0]?.text || 'Desconocido',
+        duracion: v.lengthText?.simpleText || '--:--',
+        vistas: v.viewCountText?.simpleText || '',
+        fecha: v.publishedTimeText?.simpleText || '',
+        url: `https://youtu.be/${v.videoId}`,
+        thumb: `https://i.ytimg.com/vi/${v.videoId}/hqdefault.jpg`
+      })
+      if (resultados.length >= limite) return resultados
+    }
+  }
+  return resultados
+}
+
 // ===== Info del video (para el preview) =====
 async function buscarVideo(query, id) {
   try {
-    const { data } = await axios.get(SEARCH_URL, { params: { query: id || query, key: API_KEY }, timeout: 30000 })
-    const results = data?.status && Array.isArray(data.result) ? data.result : []
-    const v = id ? results.find(r => r.url?.includes(id)) : results[0]
+    const results = await buscarYouTube(id || query, 5)
+    const v = id ? results.find(r => r.id === id) : results[0]
     if (!v) return null
     return {
       url: v.url,
-      title: v.title,
-      timestamp: v.duration,
-      views: toNumber(v.views),
-      thumbnail: v.banner,
-      author: { name: v.autor?.trim() }
+      title: v.titulo,
+      timestamp: v.duracion,
+      views: v.vistas,
+      thumbnail: v.thumb,
+      author: { name: v.canal }
     }
   } catch {
     return null
@@ -123,14 +159,6 @@ async function buildLinkPreview(sock, imagen, title, description, url) {
 
 const cleanFileName = name =>
   String(name).replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, ' ').trim().slice(0, 100) || 'audio'
-
-function formatViews(views) {
-  if (!views) return 'No disponible'
-  if (views >= 1_000_000_000) return `${(views / 1_000_000_000).toFixed(1)}B`
-  if (views >= 1_000_000) return `${(views / 1_000_000).toFixed(1)}M`
-  if (views >= 1_000) return `${(views / 1_000).toFixed(1)}k`
-  return views.toString()
-}
 
 export default {
   name: 'y2mate',
@@ -172,7 +200,7 @@ export default {
 
       const title = info?.title || 'Sin título'
       const duration = info?.timestamp || 'No disponible'
-      const vistas = formatViews(info?.views)
+      const vistas = info?.views || 'No disponible'
       const thumbnail = info?.thumbnail || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
 
       if (!descarga) {
