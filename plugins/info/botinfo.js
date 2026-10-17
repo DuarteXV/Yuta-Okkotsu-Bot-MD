@@ -2,9 +2,15 @@ import { totalmem, freemem, platform } from 'os'
 import path from 'path'
 import { pathToFileURL } from 'url'
 
-const IMAGEN = 'https://raw.githubusercontent.com/ANDERSONARRUE/Img.2/main/upload_1769284872805.jpg'
+const BANNER_DEFAULT = 'https://cdn.dix.lat/me/f5f104cd-9fb7-4d71-82bf-04bac49f8813.jpg'
 const CREADOR = 'DuarteXV'
 const GRUPOS_TTL = 5 * 60 * 1000
+
+const CANAL = {
+  newsletterJid: '120363420979328566@newsletter',
+  newsletterName: '⏤͟͟͞͞★꙲⃝͟𝐘𝐔𝐓𝐀 𝐎𝐊𝐊𝐎𝐓𝐒𝐔 │ 𝐂𝐇𝐀𝐍𝐍𝐄𝐋 ◌Ⳋ𝅄',
+  serverMessageId: -1
+}
 
 let cacheGrupos = { n: 0, exp: 0 }
 
@@ -49,11 +55,22 @@ export default {
   description: 'Muestra información y estado del bot',
   category: 'info',
 
-  async run({ sock, from, msg, react, reply, usedPrefix, sender, isOwner, isCoOwner, isMod, isPremium }) {
+  async run({ sock, from, msg, react, reply, usedPrefix, sender, senderNum, isOwner, isCoOwner, isMod, isPremium }) {
     try {
       const { db } = await importar('./database/db.js')
+      const { default: config } = await importar('./config.js')
       const { getPlugins } = await importar('./core/pluginLoader.js')
       const { getAllSockets } = await importar('./core/subbotManager.js')
+
+      // Mismo banner y nombre que el menú (se lee de la DB en cada uso, así que
+      // si editas el banner o el label, el cambio se ve de inmediato)
+      const currentBotNum = sock.user?.id ? sock.user.id.split('@')[0].split(':')[0].replace(/\D/g, '') : ''
+      const currentBotJid = currentBotNum ? `${currentBotNum}@s.whatsapp.net` : ''
+      const botData = db.getBot(currentBotJid) || db.getBot('main')
+
+      const esLabelAutomatico = botData?.label?.startsWith('SUB_') || botData?.label === 'Subbot' || botData?.label === 'MAIN'
+      const nombreBot = (esLabelAutomatico || !botData?.label ? config.botName : botData.label).replace(/@\d+/g, '').trim()
+      const urlFoto = botData?.banner || BANNER_DEFAULT
 
       const ts = Number(msg.messageTimestamp) || Math.floor(Date.now() / 1000)
       const latencia = Math.max(0, Date.now() - ts * 1000)
@@ -69,12 +86,11 @@ export default {
       const plugins = new Set(getPlugins().values()).size
 
       const rol = isOwner ? 'owner' : isCoOwner ? 'coowner' : isMod ? 'mod' : isPremium ? 'premium' : 'user'
-      const nombre = msg.pushName || db.getPushName(sender) || 'User'
-      const nombreBot = global.botname || 'Yuta'
+      const tipoBot = botData?.isMain === true || botData?.isMain === 1 ? 'principal' : 'subbot'
 
       const info =
         `✦ *${nombreBot}*\n\n` +
-        `❖ hola › ${nombre}\n` +
+        `❖ hola › @${senderNum}\n` +
         `✧ rol › ${rol}\n` +
         `❀ prefijo › ${usedPrefix}\n` +
         `◈ latencia › ${latencia} ms\n` +
@@ -82,16 +98,35 @@ export default {
         `✿ registrados › ${users}\n` +
         `⚝ grupos › ${grupos}\n` +
         `❁ plugins › ${plugins}\n` +
-        `✺ bots online › ${bots.length}\n\n` +
+        `✺ bots online › ${bots.length}\n` +
+        `❃ tipo › ${tipoBot}\n\n` +
         `❂ plataforma › ${platform()}\n` +
         `⟡ ram › ${formatBytes(usedRam)} / ${formatBytes(totalRam)} (${ramPercentage}%)\n\n` +
         `✪ creador › ${CREADOR}`
 
-      await sock.sendMessage(from, {
-        image: { url: IMAGEN },
-        caption: info,
-        mentions: [sender]
-      }, { quoted: msg })
+      const contextInfo = {
+        mentionedJid: [sender],
+        isForwarded: true,
+        forwardingScore: 1,
+        forwardedNewsletterMessageInfo: CANAL
+      }
+
+      try {
+        await sock.sendMessage(from, {
+          image: { url: urlFoto },
+          caption: info,
+          mentions: [sender],
+          contextInfo
+        }, { quoted: msg })
+      } catch {
+        // Si el banner editado no carga, usa el de respaldo
+        await sock.sendMessage(from, {
+          image: { url: BANNER_DEFAULT },
+          caption: info,
+          mentions: [sender],
+          contextInfo
+        }, { quoted: msg })
+      }
 
       await react('✅')
     } catch (e) {
