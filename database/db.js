@@ -27,15 +27,24 @@ db_instance.exec(`
 
 const hierarchy = ["user", "premium", "mod", "coowner", "owner"];
 
+// Los usuarios se guardan SIEMPRE por número (sin @dominio ni :dispositivo).
+// Así "123@s.whatsapp.net", "123:5@s.whatsapp.net" y "123" son la misma fila.
+function normalizeJid(jid = "") {
+  return String(jid).split("@")[0].split(":")[0];
+}
+
 const stmts = {
   getUser: db_instance.prepare("SELECT data FROM users WHERE jid = ?"),
   insertUser: db_instance.prepare("INSERT INTO users (jid, data) VALUES (?, ?)"),
   updateUser: db_instance.prepare("UPDATE users SET data = ? WHERE jid = ?"),
+  deleteUser: db_instance.prepare("DELETE FROM users WHERE jid = ?"),
   getAllUsers: db_instance.prepare("SELECT jid, data FROM users"),
+  countUsers: db_instance.prepare("SELECT COUNT(*) AS n FROM users"),
 
   getGroup: db_instance.prepare("SELECT data FROM groups WHERE jid = ?"),
   insertGroup: db_instance.prepare("INSERT INTO groups (jid, data) VALUES (?, ?)"),
   updateGroup: db_instance.prepare("UPDATE groups SET data = ? WHERE jid = ?"),
+  countGroups: db_instance.prepare("SELECT COUNT(*) AS n FROM groups"),
 
   getBot: db_instance.prepare("SELECT data FROM bots WHERE jid = ?"),
   insertBot: db_instance.prepare("INSERT INTO bots (jid, data) VALUES (?, ?)"),
@@ -44,15 +53,50 @@ const stmts = {
   deleteBot: db_instance.prepare("DELETE FROM bots WHERE jid = ?")
 };
 
+// Migración única: junta las filas viejas con JID completo en la fila por número.
+function migrateUserKeys() {
+  const rows = db_instance
+    .prepare("SELECT jid, data FROM users WHERE jid LIKE '%@%' OR jid LIKE '%:%'")
+    .all();
+  if (!rows.length) return;
+
+  const run = db_instance.transaction(() => {
+    for (const row of rows) {
+      const key = normalizeJid(row.jid);
+      const old = JSON.parse(row.data);
+      const cur = stmts.getUser.get(key);
+
+      if (!cur) {
+        stmts.insertUser.run(key, JSON.stringify(old));
+      } else {
+        const base = JSON.parse(cur.data);
+        const merged = {
+          ...base,
+          ...old,
+          role: base.role && base.role !== "user" ? base.role : old.role || "user",
+          banned: base.banned === true || old.banned === true,
+          registeredAt: [base.registeredAt, old.registeredAt].filter(Boolean).sort()[0]
+        };
+        stmts.updateUser.run(JSON.stringify(merged), key);
+      }
+      stmts.deleteUser.run(row.jid);
+    }
+  });
+  run();
+}
+
+migrateUserKeys();
+
 function getUser(jid) {
-  const row = stmts.getUser.get(jid);
+  const key = normalizeJid(jid);
+  const row = stmts.getUser.get(key);
   if (!row) {
     const defaultUser = {
       role: "user",
       banned: false,
       registeredAt: new Date().toISOString()
     };
-    stmts.insertUser.run(jid, JSON.stringify(defaultUser));
+    stmts.insertUser.run(key, JSON.stringify(defaultUser));
     return defaultUser;
   }
   return JSON.parse(row.data);
@@ -95,7 +139,7 @@ export const db = {
   setUser(jid, dataObject) {
     const currentData = getUser(jid);
     const updatedData = { ...currentData, ...dataObject };
-    stmts.updateUser.run(JSON.stringify(updatedData), jid);
+    stmts.updateUser.run(JSON.stringify(updatedData), normalizeJid(jid));
   },
 
   getAllUsers() {
@@ -104,6 +148,14 @@ export const db = {
       jid: row.jid,
       ...JSON.parse(row.data)
     }));
+  },
+
+  countUsers() {
+    return stmts.countUsers.get().n;
+  },
+
+  countGroups() {
+    return stmts.countGroups.get().n;
   },
 
   setGroup(jid, dataObject) {
@@ -149,7 +201,7 @@ export const db = {
   },
 
   hasRole(jid, role) {
-    const numeroLimpio = jid.split('@')[0];
+    const numeroLimpio = normalizeJid(jid);
 
     const esOwnerGlobal = config.ownerNumber?.includes(numeroLimpio);
     const esCoOwnerGlobal = config.coOwners?.includes(numeroLimpio);
@@ -237,12 +289,12 @@ export const db = {
       const partnerUser = getUser(partner);
       delete partnerUser.partner;
       delete partnerUser.marriedAt;
-      stmts.updateUser.run(JSON.stringify(partnerUser), partner);
+      stmts.updateUser.run(JSON.stringify(partnerUser), normalizeJid(partner));
     }
     const user = getUser(jid);
     delete user.partner;
     delete user.marriedAt;
-    stmts.updateUser.run(JSON.stringify(user), jid);
+    stmts.updateUser.run(JSON.stringify(user), normalizeJid(jid));
   },
 
   // 🚻 GÉNERO (hombre / mujer)
