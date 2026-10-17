@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { spawn } from 'child_process'
 
 let cachedClientId = null
 let cacheTime = 0
@@ -33,6 +34,52 @@ function msToTime(ms) {
   return `${m}:${s}`
 }
 
+const getBuf = (url) =>
+  axios.get(url, { responseType: 'arraybuffer', timeout: 30000 }).then(r => Buffer.from(r.data))
+
+// Descarga un stream HLS: lee la playlist, baja los segmentos y los une
+async function descargarHls(m3u8Url) {
+  const playlist = (await axios.get(m3u8Url, { timeout: 15000 })).data
+  const base = new URL(m3u8Url)
+  const lines = String(playlist).split('\n').map(l => l.trim()).filter(Boolean)
+
+  const segmentos = lines.filter(l => !l.startsWith('#')).map(l => new URL(l, base).href)
+  if (!segmentos.length) throw new Error('La playlist HLS no trae segmentos')
+
+  // Los streams AAC (fMP4) traen un segmento de inicio aparte
+  const initUri = lines.find(l => l.startsWith('#EXT-X-MAP'))?.match(/URI="([^"]+)"/)?.[1]
+
+  const partes = []
+  if (initUri) partes.push(await getBuf(new URL(initUri, base).href))
+
+  // Baja los segmentos de 6 en 6, manteniendo el orden
+  for (let i = 0; i < segmentos.length; i += 6) {
+    const lote = await Promise.all(segmentos.slice(i, i + 6).map(getBuf))
+    partes.push(...lote)
+  }
+
+  return Buffer.concat(partes)
+}
+
+// Convierte cualquier audio a mp3 con ffmpeg (si está instalado)
+function aMp3(buffer) {
+  return new Promise((resolve, reject) => {
+    const ff = spawn('ffmpeg', ['-i', 'pipe:0', '-vn', '-c:a', 'libmp3lame', '-b:a', '128k', '-f', 'mp3', 'pipe:1'])
+    const out = []
+    ff.stdout.on('data', d => out.push(d))
+    ff.on('error', reject)
+    ff.on('close', code => (code === 0 && out.length ? resolve(Buffer.concat(out)) : reject(new Error('ffmpeg falló'))))
+    ff.stdin.on('error', () => {})
+    ff.stdin.end(buffer)
+  })
+}
+
+function mimeEnvio(mime = '') {
+  if (mime.startsWith('audio/mpeg')) return 'audio/mpeg'
+  if (mime.startsWith('audio/ogg')) return 'audio/ogg; codecs=opus'
+  return 'audio/mp4'
+}
+
 export default {
   name: ['scdl', 'sc'],
   description: 'Descarga canción de SoundCloud por URL',
@@ -61,24 +108,37 @@ export default {
       const track = trackRes.data
       if (!track || track.kind !== 'track') throw new Error('No se encontró el track en esa URL')
 
+      // Orden de preferencia: mp3 progresivo > mp3 HLS > cualquier HLS
       const transcodings = track.media?.transcodings || []
-      const mp3 = transcodings.find(t => t.format?.mime_type === 'audio/mpeg' && t.format?.protocol === 'progressive')
-      const hls = transcodings.find(t => t.format?.protocol === 'hls')
-      const transcoding = mp3 || hls
+      const esMp3 = t => t.format?.mime_type?.startsWith('audio/mpeg')
+      const transcoding =
+        transcodings.find(t => esMp3(t) && t.format?.protocol === 'progressive') ||
+        transcodings.find(t => esMp3(t) && t.format?.protocol === 'hls') ||
+        transcodings.find(t => t.format?.protocol === 'hls')
+
       if (!transcoding) throw new Error('No hay stream disponible')
 
-      if (!mp3) throw new Error('Este track solo tiene stream HLS, no se puede descargar')
-
       const streamRes = await axios.get(transcoding.url, {
-        params: { client_id: clientId },
+        params: { client_id: clientId, track_authorization: track.track_authorization },
         timeout: 10000
       })
 
-      const audioRes = await axios.get(streamRes.data.url, {
-        responseType: 'arraybuffer',
-        timeout: 30000
-      })
-      const audioBuffer = Buffer.from(audioRes.data)
+      const streamUrl = streamRes.data?.url
+      if (!streamUrl) throw new Error('SoundCloud no devolvió la URL del stream')
+
+      let audioBuffer = transcoding.format.protocol === 'hls'
+        ? await descargarHls(streamUrl)
+        : await getBuf(streamUrl)
+
+      let mimetype = mimeEnvio(transcoding.format.mime_type)
+
+      // Si no es mp3, intenta convertirlo para que WhatsApp lo reproduzca bien
+      if (mimetype !== 'audio/mpeg') {
+        try {
+          audioBuffer = await aMp3(audioBuffer)
+          mimetype = 'audio/mpeg'
+        } catch {}
+      }
 
       const thumb = track.artwork_url?.replace('large', 't500x500') || null
 
@@ -99,7 +159,7 @@ export default {
 
       await sock.sendMessage(from, {
         audio: audioBuffer,
-        mimetype: 'audio/mp4',
+        mimetype,
         ptt: false
       }, { quoted: msg })
 
