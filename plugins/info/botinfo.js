@@ -1,10 +1,14 @@
+import axios from 'axios'
+import { prepareWAMessageMedia, generateWAMessageFromContent } from '@whiskeysockets/baileys'
 import { totalmem, freemem, platform } from 'os'
 import path from 'path'
 import { pathToFileURL } from 'url'
 
 const BANNER_DEFAULT = 'https://cdn.dix.lat/me/f5f104cd-9fb7-4d71-82bf-04bac49f8813.jpg'
+const LINK = 'https://mancosyasociados.kesug.com'
 const CREADOR = 'DuarteXV'
 const GRUPOS_TTL = 5 * 60 * 1000
+const BANNER_TTL = 60 * 60 * 1000
 
 const CANAL = {
   newsletterJid: '120363420979328566@newsletter',
@@ -13,9 +17,12 @@ const CANAL = {
 }
 
 let cacheGrupos = { n: 0, exp: 0 }
+const bannerCache = new Map() // url -> { media, exp }
 
 // Importa desde la raíz del proyecto, así no depende de en qué carpeta esté el plugin
 const importar = (ruta) => import(pathToFileURL(path.resolve(ruta)).href)
+
+const getTs = (ts) => (typeof ts === 'object' ? Number(ts?.low ?? ts) : Number(ts))
 
 function formatBytes(bytes) {
   const u = ['B', 'KB', 'MB', 'GB', 'TB']
@@ -50,6 +57,21 @@ async function contarGrupos(bots) {
   return ids.size
 }
 
+// Miniatura del link preview. La caché va por URL: si cambias el banner, se vuelve a subir.
+async function getBannerMedia(sock, url) {
+  const hit = bannerCache.get(url)
+  if (hit && hit.exp > Date.now()) return hit.media
+
+  const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 30000 })
+  const { imageMessage } = await prepareWAMessageMedia(
+    { image: Buffer.from(res.data) },
+    { upload: sock.waUploadToServer, mediaTypeOverride: 'thumbnail-link' }
+  )
+
+  bannerCache.set(url, { media: imageMessage, exp: Date.now() + BANNER_TTL })
+  return imageMessage
+}
+
 export default {
   name: ['info', 'botinfo', 'infobot'],
   description: 'Muestra información y estado del bot',
@@ -62,8 +84,7 @@ export default {
       const { getPlugins } = await importar('./core/pluginLoader.js')
       const { getAllSockets } = await importar('./core/subbotManager.js')
 
-      // Mismo banner y nombre que el menú (se lee de la DB en cada uso, así que
-      // si editas el banner o el label, el cambio se ve de inmediato)
+      // Mismo banner y nombre que el menú (se lee de la DB en cada uso)
       const currentBotNum = sock.user?.id ? sock.user.id.split('@')[0].split(':')[0].replace(/\D/g, '') : ''
       const currentBotJid = currentBotNum ? `${currentBotNum}@s.whatsapp.net` : ''
       const botData = db.getBot(currentBotJid) || db.getBot('main')
@@ -104,29 +125,43 @@ export default {
         `⟡ ram › ${formatBytes(usedRam)} / ${formatBytes(totalRam)} (${ramPercentage}%)\n\n` +
         `✪ creador › ${CREADOR}`
 
-      const contextInfo = {
-        mentionedJid: [sender],
-        isForwarded: true,
-        forwardingScore: 1,
-        forwardedNewsletterMessageInfo: CANAL
+      // Banner del bot; si el editado no carga, usa el de respaldo
+      let img
+      try {
+        img = await getBannerMedia(sock, urlFoto)
+      } catch {
+        img = await getBannerMedia(sock, BANNER_DEFAULT)
       }
 
-      try {
-        await sock.sendMessage(from, {
-          image: { url: urlFoto },
-          caption: info,
-          mentions: [sender],
-          contextInfo
-        }, { quoted: msg })
-      } catch {
-        // Si el banner editado no carga, usa el de respaldo
-        await sock.sendMessage(from, {
-          image: { url: BANNER_DEFAULT },
-          caption: info,
-          mentions: [sender],
-          contextInfo
-        }, { quoted: msg })
+      const content = {
+        extendedTextMessage: {
+          endCardTiles: [],
+          text: info,
+          matchedText: LINK,
+          canonicalUrl: LINK,
+          description: `Powered by ${CREADOR} | ${nombreBot}`,
+          title: nombreBot.toUpperCase(),
+          previewType: 0,
+          jpegThumbnail: img.jpegThumbnail,
+          thumbnailDirectPath: img.directPath,
+          thumbnailSha256: img.fileSha256,
+          thumbnailEncSha256: img.fileEncSha256,
+          mediaKey: img.mediaKey,
+          mediaKeyTimestamp: getTs(img.mediaKeyTimestamp),
+          thumbnailHeight: img.height || 1080,
+          thumbnailWidth: img.width || 1920,
+          inviteLinkGroupTypeV2: 0,
+          contextInfo: {
+            mentionedJid: [sender],
+            isForwarded: true,
+            forwardingScore: 1,
+            forwardedNewsletterMessageInfo: CANAL
+          }
+        }
       }
+
+      const waMsg = generateWAMessageFromContent(from, content, { userJid: sock.user?.id, quoted: msg })
+      await sock.relayMessage(from, waMsg.message, { messageId: waMsg.key.id })
 
       await react('✅')
     } catch (e) {
