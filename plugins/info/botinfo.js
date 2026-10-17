@@ -123,7 +123,8 @@ export default {
         `❃ tipo › ${tipoBot}\n\n` +
         `❂ plataforma › ${platform()}\n` +
         `⟡ ram › ${formatBytes(usedRam)} / ${formatBytes(totalRam)} (${ramPercentage}%)\n\n` +
-        `✪ creador › ${CREADOR}`
+        `✪ creador › ${CREADOR}\n` +
+        `❄ url › ${LINK}`
 
       // Banner del bot; si el editado no carga, usa el de respaldo
       let img
