@@ -2,14 +2,7 @@ import { db } from '../../database/db.js'
 
 const POR_PAGINA = 10
 
-function cleanJid(jid = '') {
-  if (!jid) return ''
-  const atIndex = jid.lastIndexOf('@')
-  if (atIndex === -1) return jid.split(':')[0]
-  const userPart = jid.slice(0, atIndex).split(':')[0]
-  const domainPart = jid.slice(atIndex + 1)
-  return `${userPart}@${domainPart}`
-}
+const numOf = (jid = '') => String(jid).split('@')[0].split(':')[0]
 
 export default {
   name: ['baltop', 'ricos'],
@@ -23,22 +16,30 @@ export default {
       return await reply({ text: '❌ No se pudo leer la lista de miembros del grupo.' })
     }
 
-    const miembrosJids = new Set()
+    // número -> JID del participante (para mencionar con el dominio correcto)
+    const miembros = new Map()
     for (const p of groupMeta.participants) {
-      if (p.id) miembrosJids.add(cleanJid(p.id))
-      if (p.phoneNumber) miembrosJids.add(cleanJid(p.phoneNumber))
+      if (!p.id) continue
+      miembros.set(numOf(p.id), p.id)
+      if (p.phoneNumber) miembros.set(numOf(p.phoneNumber), p.id)
+      if (p.lid) miembros.set(numOf(p.lid), p.id)
     }
 
-    const users = db.getAllUsers()
+    // Una sola entrada por participante (si hay filas duplicadas, gana la de más Fragmentos)
+    const porJid = new Map()
+    for (const u of db.getAllUsers()) {
+      const num = numOf(u.jid)
+      const jid = miembros.get(num)
+      if (!jid) continue
 
-    const ranked = users
-      .filter(u => miembrosJids.has(u.jid))
-      .map(u => ({
-        jid: u.jid,
-        total: (u.bolsillo ?? 0) + (u.banco ?? 0)
-      }))
-      .filter(u => u.total > 0)
-      .sort((a, b) => b.total - a.total)
+      const total = (u.bolsillo ?? 0) + (u.banco ?? 0)
+      if (total <= 0) continue
+
+      const prev = porJid.get(jid)
+      if (!prev || total > prev.total) porJid.set(jid, { jid, num, total })
+    }
+
+    const ranked = [...porJid.values()].sort((a, b) => b.total - a.total)
 
     if (ranked.length === 0) {
       return await reply({ text: '📉 Todavía nadie en este grupo tiene Fragmentos registrados.' })
@@ -56,7 +57,7 @@ export default {
 
     texto += paginaActual.map((u, i) => {
       const posicionGlobal = inicio + i + 1
-      const nombre = db.getPushName(u.jid) || u.jid.split('@')[0]
+      const nombre = db.getPushName(u.num) || u.num
       return `✰ ${posicionGlobal} » *${nombre}*\n\t\t Total→ *${u.total.toLocaleString()} Fragmentos 💰*`
     }).join('\n\n')
 
