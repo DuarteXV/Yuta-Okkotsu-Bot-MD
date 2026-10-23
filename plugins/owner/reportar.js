@@ -29,7 +29,7 @@ function parseTarget(raw) {
 }
 
 export default {
-  name: ["reportar", "report", "reportnum"],
+  name: ["reportar", "reportnum"],
   ownerOnly: true,
 
   run: async (ctx) => {
