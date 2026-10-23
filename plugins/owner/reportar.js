@@ -3,20 +3,18 @@ import { getAllSockets } from "../../core/subbotManager.js";
 import { log } from "../../core/logger.js";
 
 // ── Configuración ─────────────────────────────
-const MIN_REPORTES = 2;
-const MAX_REPORTES = 30;
+const MIN_POR_BOT = 2;
+const MAX_POR_BOT = 30;        // máximo de reportes POR BOT
 const DEFAULT_FLOW = "ContactInfo"; // alternativa: "MessageMenu"
 const TIMEOUT_MS = 15_000;
-const JITTER_MS = 1_200;      // dispersión aleatoria por reporte
-const REPEAT_GAP_MS = 2_500;  // espera extra cuando un mismo bot repite
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esTimeout = (m = "") => /timeout|timed out/i.test(m);
 
 // ── Helpers ───────────────────────────────────
 function parseTarget(raw) {
   if (!raw) return null;
 
+  // acepta +57xxx, 57xxx, 57xxx@s.whatsapp.net, 57xxx:12@...
   const at = raw.lastIndexOf("@");
   if (at !== -1) {
     const user = raw.slice(0, at).split(":")[0].replace(/\D/g, "");
@@ -29,15 +27,15 @@ function parseTarget(raw) {
 }
 
 export default {
-  name: ["reportar", "reportnum"],
+  name: ["reportar", "report", "reportnum"],
   ownerOnly: true,
 
   run: async (ctx) => {
     const { args, reply, react, sock } = ctx;
 
-    // ── Parseo: .reportar <número> [cantidad] ──
+    // ── Parseo: .reportar <número> | <reportes por bot> ──
     let numeroRaw = null;
-    let cantidad = null;
+    let porBot = null;
     let flow = DEFAULT_FLOW;
 
     for (const tk of args) {
@@ -47,39 +45,47 @@ export default {
       if (low === "menu") { flow = "MessageMenu"; continue; }
       if (low === "contacto") { flow = "ContactInfo"; continue; }
 
-      const largo = tk.replace(/\D/g, "").length;
-      if (numeroRaw === null && largo >= 7) { numeroRaw = tk; continue; }
-      if (cantidad === null && largo >= 1 && largo <= 2) cantidad = +tk.replace(/\D/g, "");
+      const digits = tk.replace(/\D/g, "");
+
+      // primer token con 7+ dígitos = número (el '+' y separadores se ignoran)
+      if (numeroRaw === null && digits.length >= 7) { numeroRaw = tk; continue; }
+
+      // resto: cantidad (1-2 dígitos) — funciona con o sin '|'
+      if (porBot === null && digits.length >= 1 && digits.length <= 2) {
+        porBot = +digits;
+      }
     }
 
     const targetJid = parseTarget(numeroRaw);
     if (!targetJid) {
       return reply(
-        "✖️ Uso: *.reportar <número> [cantidad]*\n" +
-        `> • Cantidad: ${MIN_REPORTES}-${MAX_REPORTES} (por defecto: todos los bots)\n` +
-        "> • Ej: `.reportar 573001234567` · `.reportar 573001234567 5`"
+        "✖️ Uso: *.reportar <número> | <reportes por bot>*\n" +
+        `> • Reportes por bot: ${MIN_POR_BOT}-${MAX_POR_BOT} (por defecto: ${MAX_POR_BOT})\n` +
+        "> • Reportan TODOS los bots (subbots + conectados)\n" +
+        "> • Número con o sin '+'\n" +
+        "> • Ej: `.reportar +573001234567 | 5` · `.reportar 573001234567 | 30`"
       );
     }
 
-    // ── Pool de bots conectados ──
+    // ── Pool: TODOS los bots conectados ──
     const pool = [...new Set([...getAllSockets(), sock])]
       .filter((s) => s?.user?.id && s?.ws?.isOpen !== false);
 
     if (pool.length === 0) return reply("❌ No hay bots conectados para reportar.");
 
-    // ── Cantidad (default: todos los bots) ──
+    // ── Reportes por bot (default: máximo) ──
     let nota = "";
-    if (cantidad === null) {
-      cantidad = Math.min(pool.length, MAX_REPORTES);
-    } else if (cantidad < MIN_REPORTES) {
-      cantidad = MIN_REPORTES;
-      nota = ` (mínimo ${MIN_REPORTES})`;
-    } else if (cantidad > MAX_REPORTES) {
-      cantidad = MAX_REPORTES;
-      nota = ` (máximo ${MAX_REPORTES})`;
+    if (porBot === null) {
+      porBot = MAX_POR_BOT;
+    } else if (porBot < MIN_POR_BOT) {
+      porBot = MIN_POR_BOT;
+      nota = ` (mínimo ${MIN_POR_BOT})`;
+    } else if (porBot > MAX_POR_BOT) {
+      porBot = MAX_POR_BOT;
+      nota = ` (máximo ${MAX_POR_BOT})`;
     }
 
-    // Barajado Fisher-Yates
+    // Barajado Fisher-Yates (orden de disparo)
     const shuffled = pool.slice();
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = (Math.random() * (i + 1)) | 0;
@@ -97,18 +103,14 @@ export default {
 
     await react("⏳");
 
-    // ── Disparo en paralelo ──
-    const total = shuffled.length;
-    const tareas = new Array(cantidad);
+    // ── Disparo EN PARALELO: cada bot manda `porBot` reportes de golpe ──
+    const total = shuffled.length * porBot;
+    const tareas = [];
 
-    for (let i = 0; i < cantidad; i++) {
-      const s = shuffled[i % total];
-      const espera = ((i / total) | 0) * REPEAT_GAP_MS + Math.random() * JITTER_MS;
-
-      tareas[i] = (async () => {
-        await sleep(espera);
-        await s.query({ ...base, attrs: { ...base.attrs } }, TIMEOUT_MS);
-      })();
+    for (const s of shuffled) {
+      for (let k = 0; k < porBot; k++) {
+        tareas.push(s.query({ ...base, attrs: { ...base.attrs } }, TIMEOUT_MS));
+      }
     }
 
     const resultados = await Promise.allSettled(tareas);
@@ -124,15 +126,16 @@ export default {
       fallos.set(m, (fallos.get(m) || 0) + 1);
     }
 
-    const fallidos = cantidad - ok - sinResp;
+    const fallidos = total - ok - sinResp;
     await react(fallidos === 0 ? "✅" : ok > 0 ? "⚠️" : "❌");
 
     // ── Resumen ──
     const numero = targetJid.split("@")[0];
     let out = "📢 *Reporte enviado*\n\n";
     out += `> • Número: +${numero}\n`;
-    out += `> • Reportes: ${cantidad}${nota}\n`;
-    out += `> • Bots: ${Math.min(pool.length, cantidad)}${cantidad > pool.length ? ` (+${cantidad - pool.length} reenvíos)` : ""}\n`;
+    out += `> • Bots: ${shuffled.length}\n`;
+    out += `> • Reportes por bot: ${porBot}${nota}\n`;
+    out += `> • Total de reportes: ${total}\n`;
     out += `> • Resultado: ✅ ${ok}`;
     if (sinResp) out += ` · ⏱️ ${sinResp} sin respuesta`;
     if (fallidos) out += ` · ❌ ${fallidos}`;
@@ -146,7 +149,7 @@ export default {
       }
     }
 
-    log.info(`[REPORTAR] ${cantidad}→${targetJid} ok=${ok} sinResp=${sinResp} fail=${fallidos}`);
+    log.info(`[REPORTAR] ${shuffled.length} bots x${porBot} → ${targetJid} ok=${ok} sinResp=${sinResp} fail=${fallidos}`);
     return reply(out);
   }
 };
