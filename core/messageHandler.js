@@ -4,20 +4,18 @@ import { getPlugins } from "./pluginLoader.js";
 import { db } from "../database/db.js";
 import { checkAntilink } from "./antilink.js";
 import { handleChatXp, handleCommandXp } from "./xp.js";
+import { claimOnce } from "./subbotManager.js";
 
 const GROUP_TTL = 10 * 60 * 1000;
-const groupCache = new Map(); // jid -> { meta, exp }
+const groupCache = new Map();
 const prefixes = Array.isArray(config.prefix) ? config.prefix : [config.prefix];
 
-// Cache de LID de owners/co-owners: se resuelve una sola vez por número,
-// no en cada mensaje. El LID de un número no cambia salvo que reinstale WhatsApp.
 const configuredLidCache = new Map();
 
 export function invalidateGroupCache(groupJid) {
   groupCache.delete(groupJid);
 }
 
-// Registrar en cada socket (principal y subbots)
 export function registerGroupCacheEvents(sock) {
   sock.ev.on("group-participants.update", ({ id }) => invalidateGroupCache(id));
   sock.ev.on("groups.update", (updates) => {
@@ -170,7 +168,6 @@ export async function handleMessage(sock, rawMsg, botLabel = "MAIN", mainBotNum 
         if (primaryBot !== myId) return;
       }
 
-      // Comandos que dependen de admins: datos frescos siempre
       if (isCmd && (plugin?.adminOnly || plugin?.botAdmin)) {
         try {
           groupMeta = await sock.groupMetadata(from);
@@ -253,6 +250,7 @@ export async function handleMessage(sock, rawMsg, botLabel = "MAIN", mainBotNum 
     if (!isCmd) return;
 
     if (!plugin) {
+      if (!claimOnce(`deny:${msg.key.id}`)) return;
       return await sock.sendMessage(from, {
         text: `✖️ EƖ ᥴoᴍanძo "*${usedPrefix}${cmdName}*" ɴo ᧉxı𝗌ƚᧉ o ᧉ𝗌ƚ⍺ m⍺Ɩ ᧉsᥴꭇiƚo.\n> usa *.help* para ver la lista de comandos.`
       }, { quoted: msg });
@@ -311,13 +309,18 @@ export async function handleMessage(sock, rawMsg, botLabel = "MAIN", mainBotNum 
       },
     };
 
-    if (plugin.ownerOnly && !isOwner && !msg.key?.fromMe) return ctx.reply({ text: "❌ Solo el owner puede usar este comando." });
-    if (plugin.modOnly && !isMod) return ctx.reply({ text: "❌ Solo moderadores pueden usar este comando." });
-    if (plugin.botAdmin && isGroup && !isBotAdmin) return ctx.reply({ text: "❌ El bot necesita ser admin del grupo." });
-    if (plugin.adminOnly && isGroup && !isAdmin && !isMod) return ctx.reply({ text: "❌ Solo administradores del grupo pueden usar este comando." });
-    if (plugin.premiumOnly && !isPremium) return ctx.reply({ text: "⭐ Este comando es exclusivo para premium." });
-    if (plugin.groupOnly && !isGroup) return ctx.reply({ text: "👥 Este comando solo funciona en grupos." });
-    if (plugin.privateOnly && isGroup) return ctx.reply({ text: "📩 Este comando solo funciona en privado." });
+    const denyOnce = (text) => {
+      if (!claimOnce(`deny:${msg.key.id}`)) return;
+      return ctx.reply({ text });
+    };
+
+    if (plugin.ownerOnly && !isOwner && !msg.key?.fromMe) return denyOnce("❌ Solo el owner puede usar este comando.");
+    if (plugin.modOnly && !isMod) return denyOnce("❌ Solo moderadores pueden usar este comando.");
+    if (plugin.botAdmin && isGroup && !isBotAdmin) return denyOnce("❌ El bot necesita ser admin del grupo.");
+    if (plugin.adminOnly && isGroup && !isAdmin && !isMod) return denyOnce("❌ Solo administradores del grupo pueden usar este comando.");
+    if (plugin.premiumOnly && !isPremium) return denyOnce("⭐ Este comando es exclusivo para premium.");
+    if (plugin.groupOnly && !isGroup) return denyOnce("👥 Este comando solo funciona en grupos.");
+    if (plugin.privateOnly && isGroup) return denyOnce("📩 Este comando solo funciona en privado.");
 
     const start = Date.now();
     try {
