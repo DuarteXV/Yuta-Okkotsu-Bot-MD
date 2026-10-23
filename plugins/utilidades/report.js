@@ -29,7 +29,7 @@ async function enviarConCualquierBot(sockOriginal, payload) {
 }
 
 export default {
-  name: ["report", "reportar"],
+  name: ["report"],
   description: "Envía un reporte al grupo de staff",
   category: "utils",
   ownerOnly: false,
