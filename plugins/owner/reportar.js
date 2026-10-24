@@ -20,7 +20,7 @@ const TIMEOUT = 8000;
 const DEBUG = true;
 
 export default {
-  name: ["reportar", "report", "reporte"],
+  name: ["reportar", "reporte"],
   description: "Reporta un número usando todos los bots conectados",
   category: "owner",
   ownerOnly: true,
