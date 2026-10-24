@@ -22,7 +22,8 @@ const DEBUG = true;
 export default {
   name: ["reportar", "report", "reporte"],
   description: "Reporta un número usando todos los bots conectados",
-  category: "sockets",
+  category: "owner",
+  ownerOnly: true,
   groupOnly: false,
 
   async run({ sock, from, msg, reply, text, react, groupMeta }) {
