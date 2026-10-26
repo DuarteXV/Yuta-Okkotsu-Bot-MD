@@ -134,7 +134,9 @@ export async function handleMessage(sock, rawMsg, botLabel = "MAIN", mainBotNum 
     const usedPrefix = prefixes.find((p) => body.startsWith(p)) ?? null;
     const isCmd = !!usedPrefix;
 
-    if (msg.key?.fromMe && !isCmd) return;
+    const fromMe = !!msg.key?.fromMe;
+
+    if (fromMe && !isCmd) return;
 
     const afterPrefix = isCmd ? body.slice(usedPrefix.length).trimStart() : "";
     const cmdName = isCmd ? afterPrefix.split(/\s+/)[0].toLowerCase() : "";
@@ -187,10 +189,22 @@ export async function handleMessage(sock, rawMsg, botLabel = "MAIN", mainBotNum 
 
     const senderNum = sender.split("@")[0];
 
-    const isOwner = await matchesConfiguredNumber(config.ownerNumber, senderNum, rawSenderLid, sock);
-    const isCoOwner = await matchesConfiguredNumber(config.coOwners, senderNum, rawSenderLid, sock);
-    const isMod = isOwner || isCoOwner || db.hasRole(senderNum, "mod");
-    const isPremium = isMod || db.hasRole(senderNum, "premium");
+    // Si el mensaje es del propio bot (fromMe), los permisos se evalúan
+    // con el número del bot, no con el chat. Así un subbot solo es owner
+    // si su número está en config.ownerNumber / config.coOwners.
+    const botNum = botJid.split("@")[0];
+    const botLid = cleanJid(sock.user?.lid || "");
+    const permNum = fromMe ? botNum : senderNum;
+    const permLid = fromMe ? botLid : rawSenderLid;
+
+    const isMainBotSelf = fromMe && !!mainBotNum && botNum === String(mainBotNum);
+
+    const isOwner =
+      isMainBotSelf ||
+      await matchesConfiguredNumber(config.ownerNumber, permNum, permLid, sock);
+    const isCoOwner = await matchesConfiguredNumber(config.coOwners, permNum, permLid, sock);
+    const isMod = isOwner || isCoOwner || db.hasRole(permNum, "mod");
+    const isPremium = isMod || db.hasRole(permNum, "premium");
 
     let isAdmin = false;
     let isBotAdmin = false;
@@ -227,7 +241,9 @@ export async function handleMessage(sock, rawMsg, botLabel = "MAIN", mainBotNum 
     if (isGroup) {
       const groupData = db.getGroup(from);
 
-      if (groupData?.selfMode && !isOwner && !isCoOwner && !msg.key?.fromMe) {
+      // fromMe solo sirve para que el bot siga respondiendo en self mode,
+      // no da permisos de owner.
+      if (groupData?.selfMode && !isOwner && !isCoOwner && !fromMe) {
         return;
       }
 
@@ -314,7 +330,7 @@ export async function handleMessage(sock, rawMsg, botLabel = "MAIN", mainBotNum 
       return ctx.reply({ text });
     };
 
-    if (plugin.ownerOnly && !isOwner && !msg.key?.fromMe) return denyOnce("❌ Solo el owner puede usar este comando.");
+    if (plugin.ownerOnly && !isOwner) return denyOnce("❌ Solo el owner puede usar este comando.");
     if (plugin.modOnly && !isMod) return denyOnce("❌ Solo moderadores pueden usar este comando.");
     if (plugin.botAdmin && isGroup && !isBotAdmin) return denyOnce("❌ El bot necesita ser admin del grupo.");
     if (plugin.adminOnly && isGroup && !isAdmin && !isMod) return denyOnce("❌ Solo administradores del grupo pueden usar este comando.");
