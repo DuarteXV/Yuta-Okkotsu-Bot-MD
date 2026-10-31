@@ -4,9 +4,9 @@ import { db } from "../../database/db.js";
 export default {
   name: ["self"],
   description: 'Prende o apaga el modo self del grupo usando "on" u "off"',
-  category: "owner",
+  category: "sockets",
   groupOnly: true,
-  ownerOnly: true,
+  ownerOnly: false,
 
   async run({ from, args, react, reply }) {
     const accion = args[0]?.toLowerCase();
