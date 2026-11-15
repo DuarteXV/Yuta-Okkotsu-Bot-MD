@@ -1,3 +1,4 @@
+
 const BASE = 'https://www.instagram.com';
 const TIMEOUT = 30000;
 const MAX_MEDIA = 20;
@@ -16,8 +17,6 @@ const META_RE = /<meta\b[^>]*>/gi;
 const ATTR_RE = /([\w:.-]+)\s*=\s*"([^"]*)"/g;
 const UI_ASSET_RE = /\/rsrc\.php\//i;
 
-// Cadea de intentos. Só o primeiro está verificado na captura (200 text/html).
-// Os demais son fallbacks: fallan cedo e sen romper o fluxo.
 const CANDIDATOS = [
   { kind: 'html', build: sc => `${BASE}/reel/${sc}/` },
   { kind: 'html', build: sc => `${BASE}/p/${sc}/` },
@@ -110,7 +109,11 @@ function* walk(node) {
 
     if (current && typeof current === 'object') {
       yield current;
-      for (const value of Object.values(current)) stack.push(value);
+
+      for (const value of Object.values(current)) {
+        stack.push(value);
+      }
+
       continue;
     }
 
@@ -138,7 +141,9 @@ function biggest(list) {
 
   if (!items.length) return null;
 
-  return items.reduce((a, b) => (area(b) > area(a) ? b : a));
+  return items.reduce((a, b) =>
+    area(b) > area(a) ? b : a
+  );
 }
 
 function pickVideoVersion(list) {
@@ -149,16 +154,24 @@ function pickVideoVersion(list) {
   if (!items.length) return null;
 
   const rank = item => {
-    const type = String(item.type == null ? '' : item.type).toUpperCase();
+    const type = String(
+      item.type == null ? '' : item.type
+    ).toUpperCase();
+
     if (type.includes('640_HIGH')) return 3;
     if (type.includes('480_HIGH')) return 2;
     if (type.includes('HIGH')) return 1;
+
     return 0;
   };
 
   return items.reduce((a, b) => {
     const difference = rank(b) - rank(a);
-    if (difference !== 0) return difference > 0 ? b : a;
+
+    if (difference !== 0) {
+      return difference > 0 ? b : a;
+    }
+
     return area(b) > area(a) ? b : a;
   });
 }
@@ -168,7 +181,10 @@ function resolveShortcode(input) {
   const match = SHORTCODE_RE.exec(value);
 
   if (match) return match[1];
-  if (/^[A-Za-z0-9_-]{5,}$/.test(value)) return value;
+
+  if (/^[A-Za-z0-9_-]{5,}$/.test(value)) {
+    return value;
+  }
 
   throw new Error('No encuentro un shortcode válido en el enlace.');
 }
@@ -176,15 +192,16 @@ function resolveShortcode(input) {
 async function fetchResp(url, kind) {
   const headers = {
     'User-Agent': UA,
-    'Accept':
-      kind === 'json'
-        ? 'application/json, */*;q=0.1'
-        : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept': kind === 'json'
+      ? 'application/json, */*;q=0.1'
+      : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'es-CO,es;q=0.9,en;q=0.8',
     'Referer': BASE + '/'
   };
 
-  if (COOKIE) headers.Cookie = COOKIE;
+  if (COOKIE) {
+    headers.Cookie = COOKIE;
+  }
 
   return fetch(url, {
     headers,
@@ -193,13 +210,13 @@ async function fetchResp(url, kind) {
   });
 }
 
-// Extrae o primeiro {…} balanceado que aparece despois do marcador.
-// Serve para ler window.__additionalDataLoaded(...) do embed, que non é JSON puro.
 function extractJsonAfter(text, marker) {
-  const idx = text.indexOf(marker);
-  if (idx === -1) return null;
+  const index = text.indexOf(marker);
 
-  const start = text.indexOf('{', idx);
+  if (index === -1) return null;
+
+  const start = text.indexOf('{', index);
+
   if (start === -1) return null;
 
   let depth = 0;
@@ -207,29 +224,36 @@ function extractJsonAfter(text, marker) {
   let escaped = false;
 
   for (let i = start; i < text.length; i++) {
-    const c = text[i];
+    const char = text[i];
 
     if (inString) {
       if (escaped) {
         escaped = false;
         continue;
       }
-      if (c === '\\') {
+
+      if (char === '\\') {
         escaped = true;
         continue;
       }
-      if (c === '"') inString = false;
+
+      if (char === '"') {
+        inString = false;
+      }
+
       continue;
     }
 
-    if (c === '"') {
+    if (char === '"') {
       inString = true;
       continue;
     }
 
-    if (c === '{') depth++;
-    else if (c === '}') {
+    if (char === '{') {
+      depth++;
+    } else if (char === '}') {
       depth--;
+
       if (depth === 0) {
         try {
           return JSON.parse(text.slice(start, i + 1));
@@ -259,15 +283,25 @@ function parseMetas(html) {
     const attrs = {};
 
     ATTR_RE.lastIndex = 0;
+
     let match;
 
     while ((match = ATTR_RE.exec(tag))) {
-      attrs[match[1].toLowerCase()] = decodeEntities(match[2]);
+      attrs[match[1].toLowerCase()] =
+        decodeEntities(match[2]);
     }
 
-    const key = (attrs.property || attrs.name || '').toLowerCase();
+    const key = (
+      attrs.property ||
+      attrs.name ||
+      ''
+    ).toLowerCase();
 
-    if (key && attrs.content && output[key] === undefined) {
+    if (
+      key &&
+      attrs.content &&
+      output[key] === undefined
+    ) {
       output[key] = attrs.content;
     }
   }
@@ -294,8 +328,12 @@ function collect(obj, meta, add) {
     meta.code = obj.code;
   }
 
-  if (Array.isArray(obj.video_versions) && obj.video_versions.length) {
+  if (
+    Array.isArray(obj.video_versions) &&
+    obj.video_versions.length
+  ) {
     const best = pickVideoVersion(obj.video_versions);
+
     if (best) {
       add('video', best.url, 'video_versions', {
         width: best.width,
@@ -314,6 +352,7 @@ function collect(obj, meta, add) {
     Array.isArray(obj.image_versions2.candidates)
   ) {
     const best = biggest(obj.image_versions2.candidates);
+
     if (best) {
       add('image', best.url, 'image_versions2', {
         width: best.width,
@@ -330,16 +369,15 @@ function collect(obj, meta, add) {
     add('image', obj.display_uri, 'display_uri');
   }
 
-  // video_image.uri: dato confirmado no preloader público desta captura.
-  if (obj.video_image && typeof obj.video_image.uri === 'string') {
+  if (
+    obj.video_image &&
+    typeof obj.video_image.uri === 'string'
+  ) {
     add('image', obj.video_image.uri, 'video_image.uri', {
       width: obj.video_image.width,
       height: obj.video_image.height
     });
   }
-
-  // carousel_media: o walk xa entra en cada slide, cada un cos seus
-  // video_versions / image_versions2 propios.
 }
 
 function extractMedia(html, data) {
@@ -349,15 +387,23 @@ function extractMedia(html, data) {
 
   const add = (type, rawUrl, source, extra) => {
     const url = cleanUrl(rawUrl);
+
     if (!url || seen.has(url)) return;
 
     seen.add(url);
 
-    const item = { type, url, source };
+    const item = {
+      type,
+      url,
+      source
+    };
 
     if (extra) {
       for (const key of Object.keys(extra)) {
-        if (extra[key] !== undefined && extra[key] !== null) {
+        if (
+          extra[key] !== undefined &&
+          extra[key] !== null
+        ) {
           item[key] = extra[key];
         }
       }
@@ -366,22 +412,25 @@ function extractMedia(html, data) {
     media.push(item);
   };
 
-  // 1) Metas (cando hai html): portada real, og:video non existe nesta ruta.
   if (html) {
     const metas = parseMetas(html);
-    add('image', metas['og:image'], 'meta:og:image');
-  }
 
-  // 2) <script> inline co preloader Relay (só no html).
-  if (html) {
+    add(
+      'image',
+      metas['og:image'],
+      'meta:og:image'
+    );
+
     SCRIPT_RE.lastIndex = 0;
+
     let match;
 
     while ((match = SCRIPT_RE.exec(html))) {
       const attrs = match[1];
       const body = match[2];
 
-      const isJson = /type\s*=\s*"application\/json"/i.test(attrs);
+      const isJson =
+        /type\s*=\s*"application\/json"/i.test(attrs);
 
       if (
         !isJson &&
@@ -405,7 +454,6 @@ function extractMedia(html, data) {
     }
   }
 
-  // 3) JSON xa parseado (API ?__a=1 ou embed).
   if (data) {
     for (const item of walk(data)) {
       collect(item, meta, add);
@@ -413,60 +461,75 @@ function extractMedia(html, data) {
   }
 
   media.sort((a, b) => {
-    if (a.type !== b.type) return a.type === 'video' ? -1 : 1;
+    if (a.type !== b.type) {
+      return a.type === 'video' ? -1 : 1;
+    }
+
     return area(b) - area(a);
   });
 
   const limited = media.slice(0, MAX_MEDIA);
+
   limited.forEach((item, index) => {
     item.index = index + 1;
   });
 
-  return { media: limited, meta };
+  return {
+    media: limited,
+    meta
+  };
 }
 
 async function igMedia(input) {
   const shortcode = resolveShortcode(input);
   const errors = [];
 
-  for (const candidato of CANDIDATOS) {
-    const url = candidato.build(shortcode);
+  for (const candidate of CANDIDATOS) {
+    const url = candidate.build(shortcode);
 
     try {
-      const response = await fetchResp(url, candidato.kind);
+      const response = await fetchResp(
+        url,
+        candidate.kind
+      );
 
       if (!response.ok) {
-        errors.push(`${url} → HTTP ${response.status}`);
+        errors.push(`HTTP ${response.status}`);
         continue;
       }
 
-      const contentType =
-        (response.headers.get('content-type') || '').toLowerCase();
+      const contentType = (
+        response.headers.get('content-type') || ''
+      ).toLowerCase();
 
       let html = null;
       let data = null;
 
       if (
-        candidato.kind === 'json' ||
+        candidate.kind === 'json' ||
         contentType.includes('application/json')
       ) {
         try {
           data = await response.json();
-        } catch (error) {
-          errors.push(`${url} → JSON inválido: ${error.message}`);
+        } catch {
+          errors.push('Respuesta JSON inválida');
           continue;
         }
       } else {
         html = await response.text();
-        if (candidato.kind === 'embed') {
+
+        if (candidate.kind === 'embed') {
           data = extractEmbedJson(html);
         }
       }
 
-      const { media, meta } = extractMedia(html, data);
+      const {
+        media,
+        meta
+      } = extractMedia(html, data);
 
       if (!media.length) {
-        errors.push(`${url} → sen media`);
+        errors.push('Respuesta sin contenido multimedia');
         continue;
       }
 
@@ -474,29 +537,31 @@ async function igMedia(input) {
 
       if (!media.some(item => item.type === 'video')) {
         notes.push(
-          'Sen video_versions nin video_url no payload: só portada. ' +
-            'Con IG_COOKIE (sessionid dunha conta) adoita saír o vídeo.'
+          'No se encontraron video_versions ni video_url; se obtuvo solamente contenido de imagen o portada.'
         );
       }
 
-      if (meta.typename && /Carousel/i.test(meta.typename)) {
-        notes.push('É un carrusel: cada slide trae o seu propio vídeo/foto.');
+      if (
+        meta.typename &&
+        /Carousel/i.test(meta.typename)
+      ) {
+        notes.push('La publicación parece ser un carrusel.');
       }
 
       return {
         status: true,
         platform: 'instagram',
         shortcode,
-        url,
-        source: candidato.kind,
+        source: candidate.kind,
         typename: meta.typename || null,
         total: media.length,
         media,
         notes,
-        extractionMethod: `relay-preloader+${candidato.kind}`
+        extractionMethod: `relay-preloader+${candidate.kind}`
       };
+
     } catch (error) {
-      errors.push(`${url} → ${error.message || String(error)}`);
+      errors.push(error.message || 'Error de conexión');
     }
   }
 
@@ -504,14 +569,14 @@ async function igMedia(input) {
     status: false,
     platform: 'instagram',
     shortcode,
-    error: errors.join(' | ') || 'Non se atopou contido multimedia.'
+    error: errors.join(' | ') || 'No se encontró contenido multimedia.'
   };
 }
 
 export default {
-  name: ['ig', 'instagram'],
-  description: 'Extrae vídeos e imaxes de Instagram.',
-  category: 'downloader',
+  name: ['test'],
+  description: 'Prueba la extracción multimedia de Instagram.',
+  category: 'owner',
   groupOnly: false,
   ownerOnly: true,
 
@@ -529,19 +594,20 @@ export default {
 
       const result = await igMedia(input);
 
-      await reply(JSON.stringify(result, null, 2));
+      await reply(
+        JSON.stringify(result, null, 2)
+      );
 
       if (react) {
         await react(result.status ? '✅' : '⚠️');
       }
+
     } catch (error) {
-      const result = {
+      await reply(JSON.stringify({
         status: false,
         platform: 'instagram',
         error: error.message || 'Error desconocido'
-      };
-
-      await reply(JSON.stringify(result, null, 2));
+      }, null, 2));
 
       if (react) {
         await react('❌').catch(() => {});
