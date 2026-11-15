@@ -1,8 +1,9 @@
-import axios from 'axios';
+
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import axios from 'axios';
 import { pipeline } from 'stream/promises';
 import { Transform } from 'stream';
 
@@ -10,29 +11,43 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const TEMP_DIR = path.resolve(__dirname, '../../tmp');
 
-const MAX_DOWNLOAD_MB = 60;
-const MAX_DOWNLOAD_BYTES = MAX_DOWNLOAD_MB * 1024 * 1024;
+const ORIGIN = 'https://www.instagram.com';
+
+const MAX_SIZE_MB = 60;
+const MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024;
 const MAX_MEDIA = 10;
 
 const PAGE_TIMEOUT = 25000;
-const GRAPHQL_TIMEOUT = 25000;
+const REQUEST_TIMEOUT = 30000;
 const DOWNLOAD_TIMEOUT = 120000;
 
 const UA =
-  'Mozilla/5.0 (Linux; Android 11; Mobile) AppleWebKit/537.36 ' +
-  '(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
+  'Mozilla/5.0 (Linux; Android 11; moto g(9) play Build/RPXS31.Q2-58-17-7-3; wv) ' +
+  'AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/157.0.8103.40 Mobile Safari/537.36';
 
-const IG_APP_ID = '1217981644879628';
 const ASBD_ID = '359341';
-
-const COMET_REQ = '117';
+const HS = '20772.HYP:instagram_web_logged_out_pkg.2.1...0';
+const COMET = '117';
 
 const CRN =
-  'comet.instagramwebloggedout.PolarisLoggedOutMobileVideoPostWithUpsellRoute';
+  'comet.instagramwebloggedout.PolarisPostLandingPageFullyPerfOptimizedRoute';
 
-const HS = '20772.HYP:instagram_web_logged_out_pkg.2.1...0';
+const FALLBACK = {
+  routingNamespace: 'igx_www_logged_out$a$87a091182d5bd65bcb043a2888004e09',
+  nonce: 'ZA0wfSNZ',
+  lsd: 'AdSHj0HtzF5aCm-TiZ658znd7hc',
+  rev: '1054711067'
+};
 
-const REV_DEFAULT = '1054706852';
+const CLIENT_STATE = {
+  __dyn: '',
+  __csr: '',
+  __s: '',
+  __hsi: '',
+  __hblp: '',
+  __sjsp: '',
+  __hsdp: ''
+};
 
 // --------------------------------------------------
 // VALIDACIÓN
@@ -55,7 +70,7 @@ function validateInstagramUrl(value) {
       return false;
     }
 
-    return /^\/(reel|reels|p|tv)\/[A-Za-z0-9_-]+\/?/.test(
+    return /^\/(reel|reels|p|tv)\/[A-Za-z0-9_-]+\/?$/.test(
       parsed.pathname
     );
   } catch {
@@ -65,6 +80,7 @@ function validateInstagramUrl(value) {
 
 function parseInstagramUrl(value) {
   const parsed = new URL(value);
+
   const match = parsed.pathname.match(
     /^\/(reel|reels|p|tv)\/([A-Za-z0-9_-]+)/
   );
@@ -80,22 +96,36 @@ function parseInstagramUrl(value) {
 }
 
 // --------------------------------------------------
-// HTTP / COOKIES
+// COOKIE JAR
 // --------------------------------------------------
 
 function createCookieJar() {
-  const jar = {};
+  const jar = {
+    dpr: '2.012500047683716',
+    wd: '358x312'
+  };
 
   return {
     absorb(response) {
-      const cookies = response.headers['set-cookie'] || [];
+      let cookies = [];
+
+      if (typeof response.headers.getSetCookie === 'function') {
+        cookies = response.headers.getSetCookie();
+      } else {
+        const raw = response.headers.get('set-cookie');
+
+        if (raw) {
+          cookies = raw.split(/,(?=\s*[^;=]+=)/);
+        }
+      }
 
       for (const cookie of cookies) {
         const pair = cookie.split(';')[0];
         const index = pair.indexOf('=');
 
         if (index > 0) {
-          jar[pair.slice(0, index)] = pair.slice(index + 1);
+          jar[pair.slice(0, index).trim()] =
+            pair.slice(index + 1).trim();
         }
       }
     },
@@ -111,6 +141,36 @@ function createCookieJar() {
     }
   };
 }
+
+// --------------------------------------------------
+// HTTP
+// --------------------------------------------------
+
+async function ig(url, jar, init = {}) {
+  const response = await fetch(url, {
+    ...init,
+    redirect: 'follow',
+    signal: AbortSignal.timeout(
+      init.timeout || REQUEST_TIMEOUT
+    ),
+    headers: {
+      'user-agent': UA,
+      'accept': '*/*',
+      'accept-language': 'es-CO,es;q=0.9,en;q=0.8',
+      'accept-encoding': 'gzip, deflate',
+      'cookie': jar.header(),
+      ...(init.headers || {})
+    }
+  });
+
+  jar.absorb(response);
+
+  return response;
+}
+
+// --------------------------------------------------
+// UTILIDADES
+// --------------------------------------------------
 
 function extractBalancedEnd(source, start, open, close) {
   let depth = 0;
@@ -142,157 +202,215 @@ function extractBalancedEnd(source, start, open, close) {
     } else if (char === close) {
       depth--;
 
-      if (depth === 0) {
-        return i;
-      }
+      if (depth === 0) return i;
     }
   }
 
   return -1;
 }
 
-function extractPreloaders(html) {
-  const results = [];
-  const key = '"expectedPreloaders":';
-
-  let index = 0;
-
-  while ((index = html.indexOf(key, index)) !== -1) {
-    const start = html.indexOf('[', index + key.length);
-
-    if (start === -1) break;
-
-    const end = extractBalancedEnd(html, start, '[', ']');
-
-    if (end === -1) break;
-
-    try {
-      const parsed = JSON.parse(
-        html.slice(start, end + 1)
-      );
-
-      for (const item of parsed) {
-        if (item?.queryID && item?.queryName) {
-          results.push(item);
-        }
-      }
-    } catch {
-      // Ignorar payloads inválidos.
-    }
-
-    index = end + 1;
-  }
-
-  return results;
-}
-
-function extractLsd(html) {
-  const patterns = [
-    /"lsd"\s*:\s*"([A-Za-z0-9_-]+)"/,
-    /\\"lsd\\"\s*:\s*\\"([A-Za-z0-9_-]+)\\"/,
-    /\blsd["']?\s*[:,=]\s*["']?([A-Za-z0-9_-]{8,})/i
-  ];
-
+function matchAny(text, patterns, fallback = '') {
   for (const pattern of patterns) {
-    const match = html.match(pattern);
+    const match = text.match(pattern);
 
     if (match) return match[1];
   }
 
-  return '';
+  return fallback;
 }
 
-function extractRevision(html) {
-  return (
-    html.match(/data-btmanifest="(\d+)_main"/)?.[1] ||
-    REV_DEFAULT
+function calculateJazoest(lsd) {
+  return '2' + [...lsd].reduce(
+    (total, char) => total + char.charCodeAt(0),
+    0
   );
 }
 
+function stripPrefix(text) {
+  return text.replace(/^\s*for \(;;\);/, '');
+}
+
 // --------------------------------------------------
-// GRAPHQL RELAY
+// 1. OBTENER ENVIRONMENT
 // --------------------------------------------------
 
-async function relayQuery(target, lsd, revision, jar, referer) {
+async function getInstagramEnv(type, shortcode, jar) {
+  const pageUrl = `${ORIGIN}/${type}/${shortcode}/?l=1`;
+
+  const response = await ig(pageUrl, jar, {
+    headers: {
+      accept: 'text/html,application/xhtml+xml'
+    },
+    timeout: PAGE_TIMEOUT
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Instagram respondió HTTP ${response.status} al obtener la publicación.`
+    );
+  }
+
+  const html = await response.text();
+
+  if (
+    /\/accounts\/login|login_required|challenge_required/i.test(
+      response.url
+    )
+  ) {
+    throw new Error(
+      'Instagram requiere iniciar sesión para acceder a esta publicación.'
+    );
+  }
+
+  if (
+    /Please wait a few minutes|Try Again Later|rate limit/i.test(html)
+  ) {
+    throw new Error(
+      'Instagram está limitando temporalmente las solicitudes.'
+    );
+  }
+
+  const env = {
+    pageUrl,
+    html,
+
+    routingNamespace: matchAny(
+      html,
+      [/"routing_namespace"\s*:\s*"([^"]+)"/],
+      FALLBACK.routingNamespace
+    ),
+
+    nonce: matchAny(
+      html,
+      [/"sjsNonce"\s*:\s*"([^"]+)"/],
+      FALLBACK.nonce
+    ),
+
+    lsd: matchAny(
+      html,
+      [
+        /\["LSD",\[\],\{"token":"([^"]+)"\}/,
+        /"lsd"\s*:\s*"([^"]+)"/
+      ],
+      FALLBACK.lsd
+    ),
+
+    rev: matchAny(
+      html,
+      [/"server_revision"\s*:\s*(\d+)/],
+      FALLBACK.rev
+    )
+  };
+
+  if (!env.lsd || !env.routingNamespace || !env.nonce) {
+    throw new Error(
+      'No se pudieron obtener los parámetros necesarios de Instagram.'
+    );
+  }
+
+  return env;
+}
+
+// --------------------------------------------------
+// 2. ROUTE DEFINITION
+// --------------------------------------------------
+
+async function routeDefinition(env, type, shortcode, jar) {
   const body = new URLSearchParams();
 
-  body.set('av', '0');
+  body.set('client_previous_actor_id', '');
+  body.set('route_url', `/${type}/${shortcode}/?l=1`);
+  body.set('routing_namespace', env.routingNamespace);
+  body.set('trace_policy', '');
+
   body.set('__d', 'www');
   body.set('__user', '0');
   body.set('__a', '1');
   body.set('__req', 'r');
   body.set('__hs', HS);
-  body.set('dpr', '2');
-  body.set('__ccg', 'GOOD');
-  body.set('__rev', revision);
-  body.set('__comet_req', COMET_REQ);
-  body.set('lsd', lsd);
-  body.set('jazoest', '22241');
+  body.set('dpr', '3');
+  body.set('__ccg', 'EXCELLENT');
+  body.set('__rev', env.rev);
+  body.set('__comet_req', COMET);
+  body.set('lsd', env.lsd);
+  body.set('jazoest', calculateJazoest(env.lsd));
 
-  body.set('__spin_r', revision);
+  body.set('__spin_r', env.rev);
   body.set('__spin_b', 'trunk');
   body.set('__spin_t', String(Math.floor(Date.now() / 1000)));
   body.set('__crn', CRN);
 
-  body.set('fb_api_caller_class', 'RelayModern');
-  body.set('fb_api_req_friendly_name', target.queryName);
-  body.set('doc_id', target.queryID);
-  body.set('server_timestamps', 'true');
-  body.set('variables', JSON.stringify(target.variables));
+  for (const [key, value] of Object.entries(CLIENT_STATE)) {
+    if (value) body.set(key, value);
+  }
 
-  const response = await axios.post(
-    'https://www.instagram.com/api/graphql',
-    body.toString(),
+  const response = await ig(
+    `${ORIGIN}/ajax/route-definition/`,
+    jar,
     {
-      timeout: GRAPHQL_TIMEOUT,
-      responseType: 'text',
-      transformResponse: [(data) => data],
+      method: 'POST',
       headers: {
-        'User-Agent': UA,
-        Accept: '*/*',
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'X-FB-Friendly-Name': target.queryName,
-        'X-CSRFToken': jar.get('csrftoken'),
-        'X-IG-App-ID': IG_APP_ID,
-        'X-IG-Max-Touch-Points': '5',
-        'X-FB-LSD': lsd,
-        'X-ASBD-ID': ASBD_ID,
-        Cookie: jar.header(),
-        Origin: 'https://www.instagram.com',
-        Referer: referer
-      }
+        'content-type': 'application/x-www-form-urlencoded',
+        origin: ORIGIN,
+        referer: `${ORIGIN}/${type}/${shortcode}/`,
+        'x-fb-entry-nonce': env.nonce,
+        'x-fb-lsd': env.lsd,
+        'x-asbd-id': ASBD_ID,
+        'x-ig-d': 'www',
+        'x-ig-max-touch-points': '5'
+      },
+      body: body.toString()
     }
   );
 
-  const raw = String(response.data).replace(/^for \(;;\);/, '');
+  const text = await response.text();
 
-  const payload = JSON.parse(raw);
-
-  if (!payload?.data) {
+  if (!response.ok) {
     throw new Error(
-      'Instagram no devolvió información GraphQL.'
+      `route-definition HTTP ${response.status}: ${text.slice(0, 250)}`
     );
   }
 
-  return payload;
+  let json;
+
+  try {
+    json = JSON.parse(stripPrefix(text));
+  } catch {
+    throw new Error(
+      `Instagram devolvió una respuesta no válida: ${text.slice(0, 200)}`
+    );
+  }
+
+  const error =
+    json?.payload?.error ??
+    json?.payload?.payload?.error;
+
+  if (error) {
+    throw new Error(
+      `route-definition: ${JSON.stringify(error).slice(0, 250)}`
+    );
+  }
+
+  return json;
 }
 
 // --------------------------------------------------
-// EXTRACCIÓN DE MEDIOS
+// 3. EXTRAER MEDIOS
 // --------------------------------------------------
 
 function collectMedia(root) {
   const videos = [];
   const images = [];
 
-  const seenObjects = new WeakSet();
+  const seen = new WeakSet();
+  const urls = new Set();
 
   function walk(node) {
     if (!node || typeof node !== 'object') return;
 
-    if (seenObjects.has(node)) return;
+    if (seen.has(node)) return;
 
-    seenObjects.add(node);
+    seen.add(node);
 
     if (Array.isArray(node)) {
       node.forEach(walk);
@@ -301,28 +419,42 @@ function collectMedia(root) {
 
     if (Array.isArray(node.video_versions)) {
       for (const version of node.video_versions) {
-        if (version?.url) {
+        if (version?.url && !urls.has(version.url)) {
+          urls.add(version.url);
+
           videos.push({
             url: version.url,
+            type: version.type,
             width: version.width,
-            height: version.height,
-            type: version.type
+            height: version.height
           });
         }
       }
     }
 
-    if (typeof node.video_url === 'string') {
+    if (
+      typeof node.video_url === 'string' &&
+      node.video_url &&
+      !urls.has(node.video_url)
+    ) {
+      urls.add(node.video_url);
+
       videos.push({
         url: node.video_url
       });
     }
 
-    if (typeof node.display_url === 'string') {
+    if (
+      typeof node.display_url === 'string' &&
+      node.display_url &&
+      !urls.has(node.display_url)
+    ) {
+      urls.add(node.display_url);
+
       images.push({
         url: node.display_url,
-        width: node.dimensions?.width,
-        height: node.dimensions?.height
+        width: node.original_width,
+        height: node.original_height
       });
     }
 
@@ -334,219 +466,36 @@ function collectMedia(root) {
   walk(root);
 
   return {
-    videos: uniqueMedia(videos),
-    images: uniqueMedia(images)
-  };
-}
-
-function uniqueMedia(items) {
-  const seen = new Set();
-
-  return items.filter((item) => {
-    if (!item.url || seen.has(item.url)) return false;
-
-    seen.add(item.url);
-
-    return true;
-  });
-}
-
-function decodeHtml(value) {
-  return value
-    .replace(/&amp;/g, '&')
-    .replace(/&#38;/g, '&')
-    .replace(/\\u0026/g, '&')
-    .replace(/\\\//g, '/')
-    .replace(/&quot;/g, '"');
-}
-
-function extractMeta(html, property) {
-  const escaped = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-  const patterns = [
-    new RegExp(
-      `<meta[^>]+property=["']${escaped}["'][^>]+content=["']([^"']+)["']`,
-      'i'
-    ),
-    new RegExp(
-      `<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${escaped}["']`,
-      'i'
-    )
-  ];
-
-  for (const pattern of patterns) {
-    const match = html.match(pattern);
-
-    if (match) return decodeHtml(match[1]);
-  }
-
-  return '';
-}
-
-function cdnUrlsFromHtml(html) {
-  const videos = [];
-  const images = [];
-
-  for (const match of html.matchAll(
-    /https:\/\/[^"'\\\s<>]+?\.mp4(?:\?[^"'\\\s<>]*)?/gi
-  )) {
-    videos.push({
-      url: decodeHtml(match[0])
-        .replace(/&amp;/g, '&')
-        .replace(/&bytestart=\d+/g, '')
-        .replace(/&byteend=\d+/g, '')
-    });
-  }
-
-  for (const match of html.matchAll(
-    /https:\/\/[^"'\\\s<>]+?\.jpg(?:\?[^"'\\\s<>]*)?/gi
-  )) {
-    images.push({
-      url: decodeHtml(match[0])
-    });
-  }
-
-  const ogVideo = extractMeta(html, 'og:video');
-
-  const ogImage = extractMeta(html, 'og:image');
-
-  if (ogVideo) {
-    videos.push({ url: ogVideo });
-  }
-
-  if (ogImage) {
-    images.push({ url: ogImage });
-  }
-
-  return {
-    videos: uniqueMedia(videos),
-    images: uniqueMedia(images)
+    videos,
+    images
   };
 }
 
 // --------------------------------------------------
-// OBTENER INFORMACIÓN
+// 4. VALIDAR CDN
 // --------------------------------------------------
 
-async function getInstagramData(url) {
-  const { type, shortcode } = parseInstagramUrl(url);
+function isValidMediaUrl(value) {
+  try {
+    const url = new URL(value);
 
-  const referer =
-    `https://www.instagram.com/${type}/${shortcode}/`;
+    if (url.protocol !== 'https:') return false;
 
-  const jar = createCookieJar();
+    const host = url.hostname.toLowerCase();
 
-  const page = await axios.get(referer, {
-    timeout: PAGE_TIMEOUT,
-    maxRedirects: 5,
-    headers: {
-      'User-Agent': UA,
-      Accept: 'text/html,application/xhtml+xml',
-      'Accept-Language': 'es-CO,es;q=0.9,en;q=0.8'
-    }
-  });
-
-  jar.absorb(page);
-
-  const html = page.data;
-
-  if (typeof html !== 'string') {
-    throw new Error('Instagram devolvió una respuesta HTML inválida.');
-  }
-
-  if (
-    /login_required|challenge_required|accounts\/login/i.test(
-      page.request?.res?.responseUrl || ''
-    )
-  ) {
-    throw new Error('Instagram requiere iniciar sesión para esta publicación.');
-  }
-
-  const preloaders = extractPreloaders(html);
-
-  const target =
-    preloaders.find(
-      (item) =>
-        /PostLandingPage/i.test(item.queryName) &&
-        item.variables?.mediaId
-    ) ||
-    preloaders.find((item) => item.variables?.mediaId) ||
-    preloaders[0];
-
-  const lsd = extractLsd(html);
-  const revision = extractRevision(html);
-
-  let media = {
-    videos: [],
-    images: []
-  };
-
-  let source = 'none';
-
-  // GraphQL
-  if (target && lsd) {
-    try {
-      const result = await relayQuery(
-        target,
-        lsd,
-        revision,
-        jar,
-        referer
-      );
-
-      media = collectMedia(result.data);
-
-      if (media.videos.length || media.images.length) {
-        source = 'graphql';
-      }
-    } catch (error) {
-      console.warn(
-        '[INSTAGRAM GRAPHQL]',
-        error.message
-      );
-    }
-  }
-
-  // Fallback HTML
-  if (!media.videos.length && !media.images.length) {
-    const fallback = cdnUrlsFromHtml(html);
-
-    media = fallback;
-
-    if (media.videos.length || media.images.length) {
-      source = 'html';
-    }
-  }
-
-  if (!media.videos.length && !media.images.length) {
-    throw new Error(
-      'No se encontraron medios. La publicación puede requerir sesión o Instagram puede haber cambiado su estructura.'
+    return (
+      host === 'cdninstagram.com' ||
+      host.endsWith('.cdninstagram.com') ||
+      host === 'fbcdn.net' ||
+      host.endsWith('.fbcdn.net')
     );
+  } catch {
+    return false;
   }
-
-  media.videos.sort(
-    (a, b) => (b.width || 0) - (a.width || 0)
-  );
-
-  media.images.sort(
-    (a, b) => (b.width || 0) - (a.width || 0)
-  );
-
-  return {
-    shortcode,
-    type,
-    source,
-    title:
-      extractMeta(html, 'og:title') ||
-      'Publicación de Instagram',
-    thumbnail: extractMeta(html, 'og:image') || null,
-    videos: media.videos,
-    images: media.images
-  };
 }
 
 // --------------------------------------------------
-// DESCARGA
+// 5. DESCARGA
 // --------------------------------------------------
 
 function createSizeLimiter(maxBytes) {
@@ -559,7 +508,7 @@ function createSizeLimiter(maxBytes) {
       if (downloaded > maxBytes) {
         return callback(
           new Error(
-            `El archivo supera el límite de ${MAX_DOWNLOAD_MB} MB.`
+            `El archivo supera el límite de ${MAX_SIZE_MB} MB.`
           )
         );
       }
@@ -570,14 +519,19 @@ function createSizeLimiter(maxBytes) {
 }
 
 async function downloadMedia(url, outputPath) {
+  if (!isValidMediaUrl(url)) {
+    throw new Error('El servidor multimedia no es válido.');
+  }
+
   const response = await axios.get(url, {
     responseType: 'stream',
     timeout: DOWNLOAD_TIMEOUT,
     maxContentLength: Infinity,
     maxBodyLength: Infinity,
+    maxRedirects: 5,
     headers: {
       'User-Agent': UA,
-      Referer: 'https://www.instagram.com/',
+      Referer: ORIGIN,
       Accept: '*/*'
     }
   });
@@ -602,7 +556,7 @@ async function downloadMedia(url, outputPath) {
   ) {
     response.data.destroy();
 
-    throw new Error('Instagram devolvió un formato multimedia no compatible.');
+    throw new Error('Instagram devolvió un formato no compatible.');
   }
 
   const contentLength = Number(
@@ -611,18 +565,18 @@ async function downloadMedia(url, outputPath) {
 
   if (
     Number.isFinite(contentLength) &&
-    contentLength > MAX_DOWNLOAD_BYTES
+    contentLength > MAX_SIZE_BYTES
   ) {
     response.data.destroy();
 
     throw new Error(
-      `El archivo supera el límite de ${MAX_DOWNLOAD_MB} MB.`
+      `El archivo supera el límite de ${MAX_SIZE_MB} MB.`
     );
   }
 
   await pipeline(
     response.data,
-    createSizeLimiter(MAX_DOWNLOAD_BYTES),
+    createSizeLimiter(MAX_SIZE_BYTES),
     fs.createWriteStream(outputPath)
   );
 
@@ -636,7 +590,7 @@ async function downloadMedia(url, outputPath) {
 }
 
 // --------------------------------------------------
-// REACCIONES
+// 6. REACCIONES
 // --------------------------------------------------
 
 async function safeReact(react, emoji) {
@@ -650,7 +604,7 @@ async function safeReact(react, emoji) {
 }
 
 // --------------------------------------------------
-// PLUGIN
+// 7. PLUGIN
 // --------------------------------------------------
 
 export default {
@@ -658,7 +612,7 @@ export default {
   description: 'Descarga videos e imágenes de Instagram.',
   category: 'owner',
   groupOnly: false,
-  ownerOnly: true, 
+  ownerOnly: true,
   async run({
     sock,
     from,
@@ -679,7 +633,8 @@ export default {
           text:
             `📸 *Descargador de Instagram*\n\n` +
             `Ingresa el enlace de un Reel o publicación pública.\n\n` +
-            `*Ejemplo:*\n${usedPrefix}${cmdName} https://www.instagram.com/reel/XXXXXXXX/`
+            `*Ejemplo:*\n` +
+            `${usedPrefix}${cmdName} https://www.instagram.com/reel/XXXXXXXX/`
         });
       }
 
@@ -695,6 +650,8 @@ export default {
         });
       }
 
+      const { type, shortcode } = parseInstagramUrl(url);
+
       await safeReact(react, '🔄');
 
       await reply({
@@ -705,56 +662,76 @@ export default {
         recursive: true
       });
 
-      const result = await getInstagramData(url);
+      // 1. Cookies y parámetros dinámicos.
+      const jar = createCookieJar();
 
-      console.log(
-        `[INSTAGRAM] ${result.shortcode} | ${result.source}`
+      const env = await getInstagramEnv(
+        type,
+        shortcode,
+        jar
       );
 
-      const media = [
-        ...result.videos.slice(0, MAX_MEDIA).map((item) => ({
-          ...item,
-          kind: 'video'
-        })),
-        ...result.images.slice(0, MAX_MEDIA).map((item) => ({
-          ...item,
-          kind: 'image'
-        }))
-      ];
+      // 2. Obtener definición de ruta.
+      const data = await routeDefinition(
+        env,
+        type,
+        shortcode,
+        jar
+      );
 
-      if (!media.length) {
-        throw new Error('No hay contenido multimedia disponible.');
+      // 3. Extraer videos e imágenes.
+      const { videos, images } = collectMedia(data);
+
+      console.log(
+        `[INSTAGRAM] ${shortcode} | videos=${videos.length} | images=${images.length}`
+      );
+
+      if (!videos.length && !images.length) {
+        throw new Error(
+          'La respuesta de route-definition no contiene medios compatibles.'
+        );
       }
 
-      // Priorizar videos. Si existen, no enviar la portada
-      // adicional cuando también aparezca como imagen.
-      const selected = result.videos.length
-        ? result.videos.slice(0, MAX_MEDIA).map((item) => ({
-            ...item,
-            kind: 'video'
-          }))
-        : result.images.slice(0, MAX_MEDIA).map((item) => ({
-            ...item,
-            kind: 'image'
-          }));
+      const selected = videos.length
+        ? [...videos]
+        : [...images];
+
+      selected.sort(
+        (a, b) =>
+          (b.height || b.width || 0) -
+          (a.height || a.width || 0)
+      );
+
+      const media = selected
+        .filter((item) => isValidMediaUrl(item.url))
+        .slice(0, MAX_MEDIA);
+
+      if (!media.length) {
+        throw new Error('No se encontraron URLs multimedia válidas.');
+      }
 
       let sent = 0;
 
-      for (let i = 0; i < selected.length; i++) {
-        const item = selected[i];
+      // 4. Descargar y enviar.
+      for (let i = 0; i < media.length; i++) {
+        const item = media[i];
 
-        const randomId = crypto.randomBytes(8).toString('hex');
+        const isVideo = videos.length > 0;
 
-        const extension = item.kind === 'video' ? 'mp4' : 'jpg';
+        const randomId = crypto
+          .randomBytes(8)
+          .toString('hex');
 
-        const filePath = path.join(
+        const extension = isVideo ? 'mp4' : 'jpg';
+
+        const outputPath = path.join(
           TEMP_DIR,
           `ig_${randomId}.${extension}`
         );
 
-        tempFiles.push(filePath);
+        tempFiles.push(outputPath);
 
-        await downloadMedia(item.url, filePath);
+        await downloadMedia(item.url, outputPath);
 
         let caption = '';
 
@@ -763,20 +740,20 @@ export default {
             `☑ *Contenido de Instagram descargado*\n` +
             `─╮\n` +
             `   ╰━━━━━━(☆)━━━━━━─╮\n` +
-            `*📸 Tipo:* ${result.type}\n` +
-            `*🔗 Código:* ${result.shortcode}\n` +
-            `*📁 Archivo:* ${selected.length} elemento(s)`;
+            `*📸 Tipo:* ${type}\n` +
+            `*🔗 Código:* ${shortcode}\n` +
+            `*📁 Archivos:* ${media.length}`;
         }
 
-        if (item.kind === 'video') {
+        if (isVideo) {
           await sock.sendMessage(
             from,
             {
               video: {
-                url: filePath
+                url: outputPath
               },
               mimetype: 'video/mp4',
-              fileName: `instagram_${result.shortcode}.mp4`,
+              fileName: `instagram_${shortcode}.mp4`,
               caption
             },
             {
@@ -788,10 +765,10 @@ export default {
             from,
             {
               image: {
-                url: filePath
+                url: outputPath
               },
               mimetype: 'image/jpeg',
-              fileName: `instagram_${result.shortcode}.jpg`,
+              fileName: `instagram_${shortcode}.jpg`,
               caption
             },
             {
@@ -827,7 +804,7 @@ export default {
         try {
           await fs.promises.unlink(file);
         } catch {
-          // El archivo puede no existir.
+          // Archivo inexistente o ya eliminado.
         }
       }
     }
