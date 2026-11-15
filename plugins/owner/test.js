@@ -1,4 +1,3 @@
-
 import { randomUUID } from 'node:crypto';
 
 const ORIGIN = 'https://www.instagram.com';
