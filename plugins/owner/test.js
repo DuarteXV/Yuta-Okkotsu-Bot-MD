@@ -1,60 +1,169 @@
 
-const GRAPHQL_URL = 'https://www.instagram.com/graphql/query';
-const TIMEOUT = 25000;
+const IG = 'https://www.instagram.com';
+const TIMEOUT = 20000;
 const MAX_MEDIA = 20;
 
-// Identificadores de la consulta GraphQL observada en Instafetch.
-const DOC_ID = '8845758582119845';
-const APP_ID = '1217981644879628';
+const UA =
+  'Mozilla/5.0 (Linux; Android 11; moto g(9) play Build/RPXS31.Q2-58-17-7-3; wv) ' +
+  'AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/157.0.8103.40 Mobile Safari/537.36';
+
+const ACCEPT =
+  'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8';
 
 const HEADERS = {
-  'User-Agent':
-    'Mozilla/5.0 (Linux; Android 11; Mobile) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36',
-  'Accept': '*/*',
-  'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
-  'Content-Type': 'application/x-www-form-urlencoded',
-  'X-FB-Friendly-Name': 'PolarisPostActionLoadPostQueryQuery',
-  'X-IG-App-ID': APP_ID,
-  'X-FB-LSD': 'AVrqPT0gJDo',
-  'X-ASBD-ID': '359341',
-  'Origin': 'https://www.instagram.com',
-  'Referer': 'https://www.instagram.com/'
+  'user-agent': UA,
+  accept: ACCEPT,
+  dpr: '2.012500047683716',
+  'viewport-width': '980',
 };
 
-function extractShortcode(input) {
-  const text = String(input || '').trim();
+const RE_URL = /instagram\.com\/(p|reel|reels|tv)\/([A-Za-z0-9_-]+)/i;
+const RE_SCRIPT = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
 
-  if (/^[A-Za-z0-9_-]{5,}$/.test(text)) {
-    return text;
-  }
-
-  const match = text.match(
-    /(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:reel|p|tv)\/([A-Za-z0-9_-]+)\/?/i
-  );
-
-  return match?.[1] || null;
+function obtenerEntrada(args, text) {
+  return String(text || args?.join(' ') || '').trim();
 }
 
-function cleanUrl(value) {
-  if (typeof value !== 'string') return null;
+function extraerShortcode(entrada) {
+  if (!entrada) return null;
 
-  const url = value
-    .replace(/&amp;/g, '&')
-    .replace(/\\u0026/g, '&')
-    .replace(/\\\//g, '/')
-    .trim();
+  const match = entrada.match(RE_URL);
 
-  if (!/^https?:\/\//i.test(url)) return null;
+  if (match) {
+    return {
+      shortcode: match[2],
+      tipoRuta: match[1].toLowerCase() === 'p'
+        ? 'p'
+        : match[1].toLowerCase() === 'tv'
+          ? 'tv'
+          : 'reel',
+    };
+  }
+
+  if (/^[A-Za-z0-9_-]{5,20}$/.test(entrada)) {
+    return { shortcode: entrada, tipoRuta: 'reel' };
+  }
+
+  return null;
+}
+
+async function obtenerCookiesAnonimas() {
+  try {
+    const response = await fetch(`${IG}/`, {
+      headers: HEADERS,
+      redirect: 'follow',
+      signal: AbortSignal.timeout(15000),
+    });
+
+    const cookies = typeof response.headers.getSetCookie === 'function'
+      ? response.headers.getSetCookie()
+      : (response.headers.get('set-cookie') || '')
+          .split(/,(?=\s*[A-Za-z0-9_-]+=)/);
+
+    return cookies
+      .map(cookie => cookie.split(';')[0].trim())
+      .filter(Boolean)
+      .join('; ');
+  } catch {
+    return '';
+  }
+}
+
+async function obtenerHTML(shortcode, tipoRuta, cookies) {
+  const url = `${IG}/${tipoRuta}/${shortcode}/`;
+  const headers = { ...HEADERS };
+
+  if (cookies) headers.cookie = cookies;
+
+  const response = await fetch(url, {
+    headers,
+    redirect: 'follow',
+    signal: AbortSignal.timeout(TIMEOUT),
+  });
+
+  return {
+    url,
+    status: response.status,
+    html: await response.text(),
+  };
+}
+
+function* obtenerScriptsJSON(html) {
+  RE_SCRIPT.lastIndex = 0;
+
+  let match;
+
+  while ((match = RE_SCRIPT.exec(html)) !== null) {
+    const atributos = match[1] || '';
+
+    if (!/data-sjs/i.test(atributos)) continue;
+    if (!/application\/json/i.test(atributos)) continue;
+
+    const contenido = (match[2] || '').trim();
+    if (!contenido) continue;
+
+    try {
+      yield JSON.parse(contenido);
+    } catch {}
+  }
+}
+
+function recorrer(nodo, visitar, vistos = new Set()) {
+  if (!nodo || typeof nodo !== 'object' || vistos.has(nodo)) return;
+
+  vistos.add(nodo);
+
+  if (Array.isArray(nodo)) {
+    for (const elemento of nodo) {
+      recorrer(elemento, visitar, vistos);
+    }
+    return;
+  }
+
+  visitar(nodo);
+
+  for (const clave of Object.keys(nodo)) {
+    recorrer(nodo[clave], visitar, vistos);
+  }
+}
+
+function mejorVideo(lista) {
+  if (!Array.isArray(lista)) return null;
+
+  return lista
+    .filter(item => item && typeof item.url === 'string')
+    .sort((a, b) =>
+      ((b.width || 0) * (b.height || 0)) -
+      ((a.width || 0) * (a.height || 0))
+    )[0] || null;
+}
+
+function mejorImagen(lista) {
+  if (!Array.isArray(lista)) return null;
+
+  return lista
+    .filter(item => item && typeof item.url === 'string')
+    .sort((a, b) =>
+      ((b.width || 0) * (b.height || 0)) -
+      ((a.width || 0) * (a.height || 0))
+    )[0] || null;
+}
+
+function limpiarURL(url) {
+  if (typeof url !== 'string') return null;
 
   try {
     const parsed = new URL(url);
     const host = parsed.hostname.toLowerCase();
 
-    const allowed =
-      host.endsWith('cdninstagram.com') ||
-      host.endsWith('fbcdn.net');
+    const permitido =
+      host === 'cdninstagram.com' ||
+      host.endsWith('.cdninstagram.com') ||
+      host === 'fbcdn.net' ||
+      host.endsWith('.fbcdn.net');
 
-    if (!allowed) return null;
+    if (!permitido) return null;
+    if (/\/(?:rsrc\.php|static)\//i.test(parsed.pathname)) return null;
 
     return parsed.href;
   } catch {
@@ -62,278 +171,220 @@ function cleanUrl(value) {
   }
 }
 
-function addMedia(output, type, value, extra = {}) {
-  const url = cleanUrl(value);
+function obtenerItem(nodo) {
+  if (!nodo || typeof nodo !== 'object') return null;
 
-  if (!url) return;
-  if (output.some(item => item.url === url)) return;
+  const video = mejorVideo(nodo.video_versions);
+  const imagen = mejorImagen(nodo.image_versions2?.candidates);
 
-  output.push({
-    type,
-    url,
-    ...extra
-  });
+  if (video) {
+    const url = limpiarURL(video.url);
+    if (!url) return null;
+
+    return {
+      tipo: 'video',
+      url,
+      ancho: video.width ?? null,
+      alto: video.height ?? null,
+      imagen_previa: limpiarURL(imagen?.url),
+    };
+  }
+
+  if (imagen) {
+    const url = limpiarURL(imagen.url);
+    if (!url) return null;
+
+    return {
+      tipo: 'imagen',
+      url,
+      ancho: imagen.width ?? null,
+      alto: imagen.height ?? null,
+    };
+  }
+
+  return null;
 }
 
-function extractMedia(media) {
-  const output = [];
+function extraerMedios(html) {
+  const meta = {
+    code: null,
+    media_id: null,
+    autor: null,
+    typename: null,
+  };
 
-  if (!media || typeof media !== 'object') {
-    return output;
+  const medios = [];
+  const urlsVistas = new Set();
+  let carrusel = null;
+
+  function agregar(item) {
+    if (!item?.url || urlsVistas.has(item.url)) return;
+    if (medios.length >= MAX_MEDIA) return;
+
+    urlsVistas.add(item.url);
+    medios.push(item);
   }
 
-  // Video principal.
-  if (media.video_url) {
-    addMedia(output, 'video', media.video_url);
-  }
+  for (const payload of obtenerScriptsJSON(html)) {
+    recorrer(payload, nodo => {
+      if (!nodo || typeof nodo !== 'object') return;
 
-  // Variantes de video.
-  if (Array.isArray(media.video_versions)) {
-    for (const item of media.video_versions) {
-      addMedia(output, 'video', item?.url, {
-        width: item?.width || null,
-        height: item?.height || null
-      });
-    }
-  }
+      if (
+        nodo.__typename?.startsWith?.('XIGPolaris') ||
+        nodo.if_not_gated_logged_out != null
+      ) {
+        meta.code ||= typeof nodo.code === 'string' ? nodo.code : null;
+        meta.media_id ||= nodo.media_id != null ? String(nodo.media_id) : null;
+        meta.autor ||= nodo.user?.username || null;
+        meta.typename ||= nodo.__typename || null;
 
-  // Imagen principal.
-  if (media.display_url) {
-    addMedia(output, 'image', media.display_url);
-  }
-
-  if (media.display_uri) {
-    addMedia(output, 'image', media.display_uri);
-  }
-
-  // Variantes de imagen.
-  const candidates = media.image_versions2?.candidates;
-
-  if (Array.isArray(candidates)) {
-    for (const item of candidates) {
-      addMedia(output, 'image', item?.url, {
-        width: item?.width || null,
-        height: item?.height || null
-      });
-    }
-  }
-
-  // Carrusel.
-  if (Array.isArray(media.carousel_media)) {
-    for (const child of media.carousel_media) {
-      const childMedia = extractMedia(child);
-
-      for (const item of childMedia) {
-        addMedia(output, item.type, item.url, {
-          width: item.width,
-          height: item.height
-        });
+        if (
+          !carrusel &&
+          Array.isArray(nodo.carousel_media) &&
+          nodo.carousel_media.length
+        ) {
+          carrusel = nodo.carousel_media;
+        }
       }
-    }
-  }
 
-  return output.slice(0, MAX_MEDIA);
-}
-
-function findMedia(data) {
-  return (
-    data?.data?.xdt_shortcode_media ||
-    data?.data?.shortcode_media ||
-    data?.graphql?.shortcode_media ||
-    data?.xdt_shortcode_media ||
-    data?.shortcode_media ||
-    null
-  );
-}
-
-function parseResponse(raw) {
-  const cleaned = String(raw)
-    .replace(/^\s*for\s*\(\s*;;\s*\)\s*;\s*/, '')
-    .replace(/^\s*while\s*\(\s*1\s*\)\s*;\s*/, '')
-    .trim();
-
-  return JSON.parse(cleaned);
-}
-
-async function fetchGraphQL(shortcode) {
-  const controller = new AbortController();
-
-  const timer = setTimeout(
-    () => controller.abort(),
-    TIMEOUT
-  );
-
-  const variables = {
-    shortcode,
-    fetch_tagged_user_count: null,
-    hoisted_comment_id: null,
-    hoisted_reply_id: null
-  };
-
-  const body = new URLSearchParams({
-    av: '0',
-    __d: 'www',
-    __user: '0',
-    __a: '1',
-    __req: 'b',
-    __comet_req: '7',
-    fb_api_caller_class: 'RelayModern',
-    fb_api_req_friendly_name: 'PolarisPostActionLoadPostQueryQuery',
-    variables: JSON.stringify(variables),
-    server_timestamps: 'true',
-    doc_id: DOC_ID
-  });
-
-  try {
-    const response = await fetch(GRAPHQL_URL, {
-      method: 'POST',
-      headers: HEADERS,
-      body: body.toString(),
-      redirect: 'follow',
-      signal: controller.signal
+      if (nodo.video_versions || nodo.image_versions2) {
+        agregar(obtenerItem(nodo));
+      }
     });
-
-    const raw = await response.text();
-
-    let data;
-
-    try {
-      data = parseResponse(raw);
-    } catch {
-      throw new Error(
-        `Instagram devolvió una respuesta que no es JSON (HTTP ${response.status}).`
-      );
-    }
-
-    if (!response.ok) {
-      throw new Error(`Instagram respondió HTTP ${response.status}.`);
-    }
-
-    if (data?.errors?.length) {
-      throw new Error(
-        data.errors[0]?.message || 'Error de GraphQL.'
-      );
-    }
-
-    if (data?.error) {
-      throw new Error(
-        data.errorDescription ||
-        data.errorSummary ||
-        `Error de Instagram: ${data.error}`
-      );
-    }
-
-    return data;
-  } finally {
-    clearTimeout(timer);
   }
-}
 
-function successResult(shortcode, media, post) {
-  return {
-    status: true,
-    platform: 'instagram',
-    shortcode,
-    id: post?.id || post?.pk || null,
-    type: post?.product_type || (
-      post?.is_video ? 'video' : 'post'
-    ),
-    caption:
-      post?.caption?.text ||
-      post?.edge_media_to_caption?.edges?.[0]?.node?.text ||
-      null,
-    username:
-      post?.owner?.username ||
-      post?.user?.username ||
-      null,
-    total: media.length,
-    media
-  };
+  if (carrusel?.length) {
+    const elementos = carrusel
+      .map(obtenerItem)
+      .filter(Boolean)
+      .slice(0, MAX_MEDIA);
+
+    if (elementos.length) {
+      return { meta, tipo: 'carrusel', medios: elementos };
+    }
+  }
+
+  if (medios.length) {
+    return {
+      meta,
+      tipo: medios.length > 1 ? 'carrusel' : medios[0].tipo,
+      medios,
+    };
+  }
+
+  const og = html.match(
+    /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i
+  );
+
+  if (og) {
+    const url = limpiarURL(og[1].replace(/&amp;/g, '&'));
+
+    if (url) {
+      return {
+        meta,
+        tipo: 'imagen',
+        medios: [{
+          tipo: 'imagen',
+          url,
+          ancho: null,
+          alto: null,
+        }],
+      };
+    }
+  }
+
+  return { meta, tipo: null, medios: [] };
 }
 
 export default {
   name: ['test'],
-  description: 'Obtiene los datos multimedia de Instagram mediante GraphQL.',
+  description: 'Extrae URLs multimedia de publicaciones públicas de Instagram.',
   category: 'owner',
   ownerOnly: true,
   groupOnly: false,
 
-  async run({ args, reply, react }) {
-    const safeReact = async emoji => {
-      try {
-        if (typeof react === 'function') {
-          await react(emoji);
-        }
-      } catch {}
+  async run({ sock, from, msg, args, reply, react }) {
+    const entrada = obtenerEntrada(args);
+    const datos = extraerShortcode(entrada);
+
+    const responder = async objeto => {
+      const json = JSON.stringify(objeto, null, 2);
+
+      if (typeof reply === 'function') return reply(json);
+
+      return sock.sendMessage(from, { text: json }, { quoted: msg });
     };
 
+    if (!datos) {
+      return responder({
+        ok: false,
+        platform: 'instagram',
+        error: 'URL o shortcode inválido.',
+        ejemplo: '.test https://www.instagram.com/reel/SHORTCODE/',
+      });
+    }
+
+    const { shortcode, tipoRuta } = datos;
+
     try {
-      const input = Array.isArray(args)
-        ? args.join(' ').trim()
-        : String(args || '').trim();
+      if (typeof react === 'function') await react('⏳');
 
-      const shortcode = extractShortcode(input);
+      const cookies = await obtenerCookiesAnonimas();
+      const resultado = await obtenerHTML(shortcode, tipoRuta, cookies);
 
-      if (!shortcode) {
-        await safeReact('❌');
-
-        return reply(JSON.stringify({
-          status: false,
-          platform: 'instagram',
-          error: 'Enlace inválido. Envía un enlace /p/, /reel/ o /tv/.'
-        }, null, 2));
-      }
-
-      await safeReact('🔎');
-
-      const data = await fetchGraphQL(shortcode);
-      const post = findMedia(data);
-
-      if (!post) {
-        await safeReact('❌');
-
-        return reply(JSON.stringify({
-          status: false,
+      if (resultado.status !== 200) {
+        return responder({
+          ok: false,
           platform: 'instagram',
           shortcode,
-          error: 'GraphQL respondió, pero no encontramos los datos de la publicación.',
-          responseKeys: Object.keys(data || {}),
-          dataKeys: Object.keys(data?.data || {})
-        }, null, 2));
+          status: resultado.status,
+          error: `Instagram respondió HTTP ${resultado.status}.`,
+        });
       }
 
-      const media = extractMedia(post);
+      const extraido = extraerMedios(resultado.html);
 
-      if (!media.length) {
-        await safeReact('❌');
-
-        return reply(JSON.stringify({
-          status: false,
+      if (!extraido.medios.length) {
+        return responder({
+          ok: false,
           platform: 'instagram',
           shortcode,
-          id: post.id || post.pk || null,
-          error: 'Se encontró la publicación, pero no sus URL multimedia.'
-        }, null, 2));
+          status: resultado.status,
+          error: 'No se encontraron datos multimedia en el HTML.',
+          diagnostic: {
+            htmlLength: resultado.html.length,
+            hasDataSjs: /data-sjs/i.test(resultado.html),
+            hasPolaris: /xig_polaris_media|XIGPolaris/i.test(resultado.html),
+            possibleLoginWall: /login_required|accounts\/login/i.test(resultado.html),
+          },
+        });
       }
 
-      await safeReact('✅');
-
-      return reply(JSON.stringify(
-        successResult(shortcode, media, post),
-        null,
-        2
-      ));
+      return responder({
+        ok: true,
+        platform: 'instagram',
+        shortcode: extraido.meta.code || shortcode,
+        type: extraido.tipo,
+        author: extraido.meta.autor,
+        media_id: extraido.meta.media_id,
+        typename: extraido.meta.typename,
+        total: extraido.medios.length,
+        media: extraido.medios,
+      });
 
     } catch (error) {
-      await safeReact('❌');
-
-      return reply(JSON.stringify({
-        status: false,
+      return responder({
+        ok: false,
         platform: 'instagram',
-        error: error.name === 'AbortError'
-          ? 'Tiempo de espera agotado.'
-          : error.message || 'Error inesperado.'
-      }, null, 2));
+        shortcode,
+        error: String(error?.message || error),
+      });
+    } finally {
+      if (typeof react === 'function') {
+        try {
+          await react('✅');
+        } catch {}
+      }
     }
-  }
+  },
 };
