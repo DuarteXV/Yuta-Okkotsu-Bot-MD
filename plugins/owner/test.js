@@ -436,11 +436,11 @@ async function safeReact(react, emoji) {
 // --------------------------------------------------
 
 export default {
-  name: ['instagram', 'ig', 'igdl'],
+  name: ['test'],
   description: 'Descarga videos e imágenes de Instagram.',
-  category: 'dl',
+  category: 'owner',
   groupOnly: false,
-
+  ownerOnly: true,
   async run({ sock, from, msg, args, usedPrefix, cmdName, reply, react }) {
     const tempFiles = [];
     try {
