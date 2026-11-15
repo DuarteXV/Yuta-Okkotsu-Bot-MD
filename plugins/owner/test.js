@@ -43,10 +43,55 @@ const CANDIDATOS = [
   }
 ];
 
+function extractShortcode(input) {
+  const text = String(input || '').trim();
+
+  if (!text) return null;
+
+  // Busca un enlace de Instagram dentro del texto recibido.
+  const matchUrl = text.match(
+    /(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:reel|p|tv)\/[A-Za-z0-9_-]+\/?/i
+  );
+
+  if (!matchUrl) {
+    // También permite recibir directamente el shortcode.
+    if (/^[A-Za-z0-9_-]{5,}$/.test(text)) {
+      return text;
+    }
+
+    return null;
+  }
+
+  try {
+    const url = new URL(
+      /^https?:\/\//i.test(matchUrl[0])
+        ? matchUrl[0]
+        : `https://${matchUrl[0]}`
+    );
+
+    const hostname = url.hostname.toLowerCase();
+
+    if (
+      hostname !== 'instagram.com' &&
+      !hostname.endsWith('.instagram.com')
+    ) {
+      return null;
+    }
+
+    const match = url.pathname.match(
+      /^\/(?:reel|p|tv)\/([A-Za-z0-9_-]+)\/?$/
+    );
+
+    return match?.[1] || null;
+  } catch {
+    return null;
+  }
+}
+
 function cleanUrl(value) {
   if (typeof value !== 'string') return null;
 
-  let url = value
+  const url = value
     .replace(/&amp;/g, '&')
     .replace(/\\u0026/g, '&')
     .replace(/\\\//g, '/')
@@ -56,7 +101,6 @@ function cleanUrl(value) {
 
   try {
     const parsed = new URL(url);
-
     const host = parsed.hostname.toLowerCase();
 
     const allowed =
@@ -89,40 +133,28 @@ function parseInstagramJson(raw) {
   return JSON.parse(cleaned);
 }
 
-function extractShortcode(input) {
-  const text = String(input || '').trim();
-
-  const match = text.match(
-    /(?:instagram\.com\/(?:reel|p|tv)\/|^)([A-Za-z0-9_-]{5,})/
-  );
-
-  return match?.[1] || null;
-}
-
 function addMedia(output, type, value) {
   const url = cleanUrl(value);
 
   if (!url) return;
-
   if (output.some(item => item.url === url)) return;
 
-  output.push({
-    type,
-    url
-  });
+  output.push({ type, url });
 }
 
 function walk(value, output, depth = 0) {
   if (!value || depth > 18 || output.length >= MAX_MEDIA) return;
 
   if (typeof value === 'string') {
+    const text = value.trim();
+
     if (
-      value.length > 20 &&
-      value.length < 200000 &&
-      /^[\[{]/.test(value.trim())
+      text.length > 20 &&
+      text.length < 200000 &&
+      /^[\[{]/.test(text)
     ) {
       try {
-        walk(JSON.parse(value), output, depth + 1);
+        walk(JSON.parse(text), output, depth + 1);
       } catch {}
     }
 
@@ -191,13 +223,13 @@ function walk(value, output, depth = 0) {
   }
 
   for (const [key, child] of Object.entries(value)) {
-    if (
-      key === 'video_versions' ||
-      key === 'image_versions2' ||
-      key === 'display_resources' ||
-      key === 'video_resources' ||
-      key === 'carousel_media'
-    ) {
+    if ([
+      'video_versions',
+      'image_versions2',
+      'display_resources',
+      'video_resources',
+      'carousel_media'
+    ].includes(key)) {
       continue;
     }
 
@@ -270,7 +302,6 @@ function extractFromHtml(html) {
         if (position === -1) continue;
 
         const start = content.indexOf('{', position);
-
         if (start === -1) continue;
 
         let depth = 0;
@@ -301,7 +332,10 @@ function extractFromHtml(html) {
 
             if (depth === 0) {
               try {
-                walk(JSON.parse(content.slice(start, i + 1)), output);
+                walk(
+                  JSON.parse(content.slice(start, i + 1)),
+                  output
+                );
               } catch {}
 
               break;
@@ -349,10 +383,6 @@ function diagnoseResponse(response, body, data) {
       ?.replace(/\s+/g, ' ')
       .slice(0, 120) || null;
 
-  const error = data?.error ?? null;
-  const errorSummary = data?.errorSummary ?? null;
-  const errorDescription = data?.errorDescription ?? null;
-
   return {
     httpStatus: response.status,
     contentType: response.headers.get('content-type'),
@@ -365,9 +395,9 @@ function diagnoseResponse(response, body, data) {
         ? Object.keys(data).slice(0, 25)
         : [],
 
-    jsonError: error,
-    errorSummary,
-    errorDescription,
+    jsonError: data?.error ?? null,
+    errorSummary: data?.errorSummary ?? null,
+    errorDescription: data?.errorDescription ?? null,
 
     payloadKeys:
       data?.payload && typeof data.payload === 'object'
@@ -407,7 +437,11 @@ function buildSuccess(shortcode, media, source) {
 
 async function fetchWithTimeout(url) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT);
+
+  const timer = setTimeout(
+    () => controller.abort(),
+    TIMEOUT
+  );
 
   try {
     return await fetch(url, {
@@ -428,6 +462,7 @@ async function fetchWithTimeout(url) {
 
 async function getCandidate(candidate, shortcode) {
   const url = candidate.build(shortcode);
+
   const response = await fetchWithTimeout(url);
   const body = await response.text();
 
@@ -447,7 +482,10 @@ async function getCandidate(candidate, shortcode) {
     }
   }
 
-  const media = extractMedia(data, candidate.kind === 'json' ? '' : body);
+  const media = extractMedia(
+    data,
+    candidate.kind === 'json' ? '' : body
+  );
 
   return {
     url,
@@ -456,6 +494,14 @@ async function getCandidate(candidate, shortcode) {
     data,
     media
   };
+}
+
+async function safeReact(react, emoji) {
+  try {
+    if (typeof react === 'function') {
+      await react(emoji);
+    }
+  } catch {}
 }
 
 export default {
@@ -474,23 +520,28 @@ export default {
       const shortcode = extractShortcode(input);
 
       if (!shortcode) {
+        await safeReact(react, '❌');
+
         return reply(JSON.stringify({
           status: false,
           platform: 'instagram',
-          error: 'Envía un enlace válido de Instagram.'
+          error: 'Enlace inválido. Envía un enlace de Instagram de tipo /reel/, /p/ o /tv/.'
         }, null, 2));
       }
 
-      await react?.('🔎');
+      await safeReact(react, '🔎');
 
       const errors = [];
 
       for (const candidate of CANDIDATOS) {
         try {
-          const result = await getCandidate(candidate, shortcode);
+          const result = await getCandidate(
+            candidate,
+            shortcode
+          );
 
           if (result.media?.length) {
-            await react?.('✅');
+            await safeReact(react, '✅');
 
             return reply(JSON.stringify(
               buildSuccess(
@@ -516,16 +567,19 @@ export default {
           errors.push(
             `${result.url} → ${reason} → ${JSON.stringify(diagnostic)}`
           );
+
         } catch (error) {
           errors.push(
-            `${candidate.build(shortcode)} → ${error.name === 'AbortError'
-              ? 'timeout'
-              : error.message}`
+            `${candidate.build(shortcode)} → ${
+              error.name === 'AbortError'
+                ? 'timeout'
+                : error.message
+            }`
           );
         }
       }
 
-      await react?.('❌');
+      await safeReact(react, '❌');
 
       return reply(JSON.stringify(
         buildError(shortcode, errors),
@@ -534,7 +588,7 @@ export default {
       ));
 
     } catch (error) {
-      await react?.('❌').catch?.(() => {});
+      await safeReact(react, '❌');
 
       return reply(JSON.stringify({
         status: false,
