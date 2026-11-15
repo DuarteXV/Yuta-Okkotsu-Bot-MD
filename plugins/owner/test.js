@@ -18,8 +18,8 @@ const HEADERS = {
   'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
   'X-IG-App-ID': '936619743392459',
   'X-Requested-With': 'XMLHttpRequest',
-  'Origin': ORIGIN,
-  'Referer': `${ORIGIN}/`
+  Origin: ORIGIN,
+  Referer: `${ORIGIN}/`
 };
 
 /* -------------------- COOKIES -------------------- */
@@ -43,10 +43,10 @@ function createCookieJar() {
 
       if (index <= 0) continue;
 
-      const name = first.slice(0, index).trim();
-      const content = first.slice(index + 1).trim();
-
-      if (name) cookies.set(name, content);
+      cookies.set(
+        first.slice(0, index).trim(),
+        first.slice(index + 1).trim()
+      );
     }
   }
 
@@ -58,17 +58,6 @@ function createCookieJar() {
 
   return { absorb, header };
 }
-
-function extractValue(html, patterns) {
-  for (const pattern of patterns) {
-    const match = html.match(pattern);
-    if (match?.[1]) return match[1];
-  }
-
-  return '';
-}
-
-/* -------------------- INSTAGRAM REQUEST -------------------- */
 
 async function ig(url, options = {}, jar) {
   const headers = {
@@ -90,33 +79,25 @@ async function ig(url, options = {}, jar) {
   return response;
 }
 
-/* -------------------- URL PARSER -------------------- */
+/* -------------------- URL -------------------- */
 
 function parseTarget(input) {
-  const value = String(input || '').trim();
-
-  if (!value) {
-    throw new Error('Envía un enlace de Instagram.');
-  }
-
-  const normalized = value.startsWith('http')
-    ? value
-    : `https://${value}`;
+  const normalized = input.startsWith('http')
+    ? input
+    : `https://${input}`;
 
   let url;
 
   try {
     url = new URL(normalized);
   } catch {
-    throw new Error('El enlace de Instagram no es válido.');
+    throw new Error('El enlace no es válido.');
   }
 
   const hostname = url.hostname.toLowerCase();
 
   if (
-    hostname !== 'instagram.com' &&
-    hostname !== 'www.instagram.com' &&
-    hostname !== 'm.instagram.com'
+    !['instagram.com', 'www.instagram.com', 'm.instagram.com'].includes(hostname)
   ) {
     throw new Error('El enlace no pertenece a Instagram.');
   }
@@ -126,17 +107,28 @@ function parseTarget(input) {
   );
 
   if (!match) {
-    throw new Error('No pude identificar el código de la publicación.');
+    throw new Error('No pude identificar la publicación.');
   }
 
+  const type = match[1] === 'reels' ? 'reel' : match[1];
+
   return {
-    type: match[1] === 'reels' ? 'reel' : match[1],
+    type,
     shortcode: match[2],
     url: `${ORIGIN}/${match[1]}/${match[2]}/`
   };
 }
 
-/* -------------------- PAGE ENVIRONMENT -------------------- */
+/* -------------------- ENVIRONMENT -------------------- */
+
+function extractValue(html, patterns) {
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (match?.[1]) return match[1];
+  }
+
+  return '';
+}
 
 function extractEnv(html) {
   return {
@@ -190,18 +182,13 @@ async function fetchEnvironment(target, jar) {
   const response = await ig(target.url, {}, jar);
 
   if (!response.ok) {
-    throw new Error(`Instagram respondió con HTTP ${response.status}.`);
+    throw new Error(`Instagram respondió HTTP ${response.status}.`);
   }
 
   const html = await response.text();
 
-  if (
-    response.url.includes('/accounts/login') ||
-    /login_required|challenge_required/i.test(html)
-  ) {
-    throw new Error(
-      'Instagram está solicitando iniciar sesión o verificar el acceso.'
-    );
+  if (response.url.includes('/accounts/login')) {
+    throw new Error('Instagram está solicitando iniciar sesión.');
   }
 
   return {
@@ -228,28 +215,31 @@ function buildRouteForm(target, env) {
   form.set('__req', '1');
   form.set('__hs', '1');
   form.set('dpr', '3');
-  form.set('__ccg', 'UNKNOWN');
 
-  if (env.rev) form.set('__rev', env.rev);
-  if (env.hsi) form.set('__hsi', env.hsi);
-  if (env.dyn) form.set('__dyn', env.dyn);
-  if (env.csr) form.set('__csr', env.csr);
-  if (env.hsdp) form.set('__hsdp', env.hsdp);
-  if (env.hblp) form.set('__hblp', env.hblp);
-  if (env.sjsp) form.set('__sjsp', env.sjsp);
-  if (env.lsd) form.set('lsd', env.lsd);
+  for (const key of [
+    'rev',
+    'hsi',
+    'dyn',
+    'csr',
+    'hsdp',
+    'hblp',
+    'sjsp',
+    'lsd'
+  ]) {
+    if (env[key]) {
+      const name = key === 'rev' ? '__rev' :
+        key === 'hsi' ? '__hsi' :
+        key === 'dyn' ? '__dyn' :
+        key === 'csr' ? '__csr' :
+        key === 'hsdp' ? '__hsdp' :
+        key === 'hblp' ? '__hblp' :
+        key === 'sjsp' ? '__sjsp' : key;
+
+      form.set(name, env[key]);
+    }
+  }
 
   return form;
-}
-
-function parseResponseText(text) {
-  const cleaned = text.replace(/^for\s*\(;;\);?\s*/, '');
-
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    return null;
-  }
 }
 
 async function routeDefinition(target, env, jar) {
@@ -276,13 +266,11 @@ async function routeDefinition(target, env, jar) {
     throw new Error(`Route definition respondió HTTP ${response.status}.`);
   }
 
-  const data = parseResponseText(text);
-
-  if (!data) {
-    throw new Error('Instagram devolvió una respuesta que no es JSON.');
+  try {
+    return JSON.parse(text.replace(/^for\s*\(;;\);?\s*/, ''));
+  } catch {
+    throw new Error('Instagram devolvió una respuesta no válida.');
   }
-
-  return data;
 }
 
 /* -------------------- MEDIA EXTRACTION -------------------- */
@@ -309,7 +297,10 @@ function cleanUrl(value) {
   try {
     const url = new URL(cleaned);
 
-    if (url.protocol !== 'https:' || !isMediaHost(url.hostname)) {
+    if (
+      url.protocol !== 'https:' ||
+      !isMediaHost(url.hostname)
+    ) {
       return null;
     }
 
@@ -322,38 +313,30 @@ function cleanUrl(value) {
   }
 }
 
-function getBestVideo(versions) {
+function bestVideo(versions) {
   if (!Array.isArray(versions)) return null;
 
   const valid = versions
     .map(item => ({
       url: cleanUrl(item?.url),
-      width: Number(item?.width || 0),
-      height: Number(item?.height || 0)
+      quality: Number(item?.width || 0) * Number(item?.height || 0)
     }))
-    .filter(item => item.url);
-
-  valid.sort((a, b) =>
-    (b.width * b.height) - (a.width * a.height)
-  );
+    .filter(item => item.url)
+    .sort((a, b) => b.quality - a.quality);
 
   return valid[0]?.url || null;
 }
 
-function getBestImage(candidates) {
+function bestImage(candidates) {
   if (!Array.isArray(candidates)) return null;
 
   const valid = candidates
     .map(item => ({
       url: cleanUrl(item?.url),
-      width: Number(item?.width || 0),
-      height: Number(item?.height || 0)
+      quality: Number(item?.width || 0) * Number(item?.height || 0)
     }))
-    .filter(item => item.url);
-
-  valid.sort((a, b) =>
-    (b.width * b.height) - (a.width * a.height)
-  );
+    .filter(item => item.url)
+    .sort((a, b) => b.quality - a.quality);
 
   return valid[0]?.url || null;
 }
@@ -374,38 +357,34 @@ function extractMedia(data) {
     }
 
     const video =
-      getBestVideo(value.video_versions) ||
+      bestVideo(value.video_versions) ||
       cleanUrl(value.video_url);
 
     const image =
-      getBestImage(value.image_versions2?.candidates) ||
+      bestImage(value.image_versions2?.candidates) ||
       cleanUrl(value.display_url) ||
       cleanUrl(value.thumbnail_url);
 
     if (video) {
       results.push({
         type: 'video',
-        url: video,
-        id: value.pk || value.id || null
+        url: video
       });
     } else if (image) {
       results.push({
         type: 'image',
-        url: image,
-        id: value.pk || value.id || null
+        url: image
       });
     }
 
     for (const [key, child] of Object.entries(value)) {
-      if (
-        key === 'video_versions' ||
-        key === 'image_versions2' ||
-        key === 'display_url' ||
-        key === 'video_url' ||
-        key === 'thumbnail_url'
-      ) {
-        continue;
-      }
+      if ([
+        'video_versions',
+        'image_versions2',
+        'display_url',
+        'video_url',
+        'thumbnail_url'
+      ].includes(key)) continue;
 
       walk(child);
     }
@@ -437,7 +416,6 @@ function extractFromHtml(html) {
   for (const pattern of patterns) {
     for (const match of html.matchAll(pattern)) {
       const url = cleanUrl(match[0]);
-
       if (!url) continue;
 
       results.push({
@@ -455,21 +433,25 @@ function extractFromHtml(html) {
 /* -------------------- DOWNLOAD -------------------- */
 
 async function downloadMedia(media, index, jar) {
-  const response = await ig(media.url, {
-    headers: {
-      'Accept': '*/*',
-      'Referer': ORIGIN
-    }
-  }, jar);
+  const response = await ig(
+    media.url,
+    {
+      headers: {
+        Accept: '*/*',
+        Referer: ORIGIN
+      }
+    },
+    jar
+  );
 
   if (!response.ok) {
-    throw new Error(`No se pudo descargar el archivo (${response.status}).`);
+    throw new Error(`Error descargando archivo: HTTP ${response.status}.`);
   }
 
   const finalUrl = new URL(response.url);
 
   if (!isMediaHost(finalUrl.hostname)) {
-    throw new Error('Instagram redirigió a un servidor no permitido.');
+    throw new Error('Redirección a un servidor no permitido.');
   }
 
   const contentType = (
@@ -480,7 +462,7 @@ async function downloadMedia(media, index, jar) {
     contentType.includes('text/html') ||
     contentType.includes('application/json')
   ) {
-    throw new Error('Instagram devolvió una página en lugar del archivo.');
+    throw new Error('Instagram devolvió una página y no el archivo.');
   }
 
   const buffer = Buffer.from(await response.arrayBuffer());
@@ -515,11 +497,19 @@ async function downloadMedia(media, index, jar) {
   return {
     filepath,
     filename,
-    type: isVideo ? 'video' : 'image'
+    type: isVideo ? 'video' : 'image',
+    mimetype: isVideo
+      ? 'video/mp4'
+      : extension === 'webp'
+        ? 'image/webp'
+        : extension === 'png'
+          ? 'image/png'
+          : 'image/jpeg',
+    buffer
   };
 }
 
-/* -------------------- MAIN SCRAPER -------------------- */
+/* -------------------- SCRAPER -------------------- */
 
 async function getInstagramMedia(input) {
   const target = parseTarget(input);
@@ -532,8 +522,8 @@ async function getInstagramMedia(input) {
   try {
     const data = await routeDefinition(target, env, jar);
     media = extractMedia(data);
-  } catch {
-    // Se utiliza el HTML como alternativa si route-definition falla.
+  } catch (error) {
+    console.error('[Instagram] Route definition:', error.message);
   }
 
   if (!media.length) {
@@ -542,18 +532,18 @@ async function getInstagramMedia(input) {
 
   if (!media.length) {
     throw new Error(
-      'No encontré contenido descargable. La publicación podría ser privada o Instagram pudo cambiar su respuesta.'
+      'No encontré contenido descargable. Puede ser una publicación privada o Instagram cambió su respuesta.'
     );
   }
 
   return {
     target,
-    media: media.slice(0, MAX_MEDIA),
+    media,
     jar
   };
 }
 
-/* -------------------- PLUGIN -------------------- */
+/* -------------------- HELPERS -------------------- */
 
 async function safeReact(react, emoji) {
   try {
@@ -569,6 +559,8 @@ async function removeTempFiles(files) {
   );
 }
 
+/* -------------------- PLUGIN -------------------- */
+
 export default {
   name: ['test'],
   description: 'Descarga videos e imágenes de Instagram.',
@@ -576,14 +568,7 @@ export default {
   groupOnly: false,
   ownerOnly: true,
 
-  async run({
-    sock,
-    from,
-    msg,
-    args,
-    reply,
-    react
-  }) {
+  async run({ sock, from, msg, args, reply, react }) {
     const input = args?.join(' ').trim();
 
     if (!input) {
@@ -592,12 +577,16 @@ export default {
       );
     }
 
-    await safeReact(react, '⏳');
-
     const downloaded = [];
+
+    await safeReact(react, '⏳');
 
     try {
       const result = await getInstagramMedia(input);
+
+      console.log(
+        `[Instagram] Encontrados ${result.media.length} archivos.`
+      );
 
       for (let i = 0; i < result.media.length; i++) {
         const file = await downloadMedia(
@@ -607,44 +596,56 @@ export default {
         );
 
         downloaded.push(file);
+
+        console.log(
+          `[Instagram] Descargado: ${file.filename} (${file.buffer.length} bytes)`
+        );
       }
 
       for (const file of downloaded) {
         const options = msg ? { quoted: msg } : {};
 
-        if (file.type === 'video') {
-          await sock.sendMessage(
-            from,
-            {
-              video: { url: file.filepath },
+        const content = file.type === 'video'
+          ? {
+              video: file.buffer,
               mimetype: 'video/mp4',
               fileName: file.filename
-            },
-            options
-          );
-        } else {
-          await sock.sendMessage(
-            from,
-            {
-              image: { url: file.filepath },
-              mimetype: file.filename.endsWith('.png')
-                ? 'image/png'
-                : file.filename.endsWith('.webp')
-                  ? 'image/webp'
-                  : 'image/jpeg'
-            },
-            options
+            }
+          : {
+              image: file.buffer,
+              mimetype: file.mimetype
+            };
+
+        console.log(
+          `[Instagram] Enviando ${file.filename} a ${from}...`
+        );
+
+        const sent = await sock.sendMessage(
+          from,
+          content,
+          options
+        );
+
+        if (!sent?.key?.id) {
+          throw new Error(
+            `Baileys no confirmó el envío de ${file.filename}.`
           );
         }
+
+        console.log(
+          `[Instagram] Enviado correctamente: ${sent.key.id}`
+        );
       }
 
       await safeReact(react, '✅');
 
     } catch (error) {
+      console.error('[Instagram Plugin]', error);
+
       await safeReact(react, '❌');
 
       return reply(
-        `No pude descargar el contenido.\n\n${error.message || 'Error desconocido.'}`
+        `Error al procesar Instagram:\n${error.message || 'Error desconocido.'}`
       );
 
     } finally {
