@@ -575,6 +575,31 @@ function extractMedia(html, data) {
   };
 }
 
+function diagnoseResponse(response, html, data) {
+  const raw = html || '';
+
+  const markers = {
+    login: /login_required|accounts\/login|Log in to Instagram/i.test(raw),
+    checkpoint: /checkpoint_required|challenge_required|\/challenge\//i.test(raw),
+    private: /This account is private|account_is_private/i.test(raw),
+    consent: /consent_required|cookie consent/i.test(raw),
+    rateLimit: /rate.?limit|Please wait a few minutes/i.test(raw),
+    mediaPayload: /video_versions|video_url|image_versions2|shortcode_media|xig_polaris_media/i.test(raw)
+  };
+
+  return {
+    httpStatus: response.status,
+    contentType: response.headers.get('content-type'),
+    finalUrl: response.url,
+    bodyLength: raw.length,
+    pageTitle: raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.slice(0, 120) || null,
+    jsonKeys: data && typeof data === 'object'
+      ? Object.keys(data).slice(0, 25)
+      : [],
+    markers
+  };
+}
+
 async function igMedia(input) {
   const shortcode = resolveShortcode(input);
   const errors = [];
@@ -626,7 +651,16 @@ async function igMedia(input) {
       const { media, meta } = extractMedia(html, data);
 
       if (!media.length) {
-        errors.push(`${url} → sin media`);
+        const diagnostic = diagnoseResponse(
+          response,
+          html,
+          data
+        );
+
+        errors.push(
+          `${url} → sin media → ${JSON.stringify(diagnostic)}`
+        );
+
         continue;
       }
 
