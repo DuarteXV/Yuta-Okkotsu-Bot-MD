@@ -1,4 +1,3 @@
-
 const BASE = 'https://www.instagram.com';
 const TIMEOUT = 30000;
 const MAX_MEDIA = 20;
@@ -17,6 +16,16 @@ const META_RE = /<meta\b[^>]*>/gi;
 const ATTR_RE = /([\w:.-]+)\s*=\s*"([^"]*)"/g;
 const UI_ASSET_RE = /\/rsrc\.php\//i;
 
+// Cadea de intentos. Só o primeiro está verificado na captura (200 text/html).
+// Os demais son fallbacks: fallan cedo e sen romper o fluxo.
+const CANDIDATOS = [
+  { kind: 'html', build: sc => `${BASE}/reel/${sc}/` },
+  { kind: 'html', build: sc => `${BASE}/p/${sc}/` },
+  { kind: 'json', build: sc => `${BASE}/p/${sc}/?__a=1&__d=disco` },
+  { kind: 'json', build: sc => `${BASE}/p/${sc}/?__a=1` },
+  { kind: 'embed', build: sc => `${BASE}/p/${sc}/embed/captioned/` }
+];
+
 function decodeEntities(value) {
   const named = {
     amp: '&',
@@ -32,9 +41,7 @@ function decodeEntities(value) {
     (match, key) => {
       const name = key.toLowerCase();
 
-      if (named[name] !== undefined) {
-        return named[name];
-      }
+      if (named[name] !== undefined) return named[name];
 
       if (name[0] === '#') {
         const number = name[1] === 'x'
@@ -44,7 +51,7 @@ function decodeEntities(value) {
         if (
           Number.isFinite(number) &&
           number >= 0 &&
-          number <= 0x10FFFF
+          number <= 0x10ffff
         ) {
           try {
             return String.fromCodePoint(number);
@@ -62,7 +69,7 @@ function cleanUrl(value) {
 
   const decoded = decodeEntities(value)
     .replace(/\\u0026/gi, '&')
-    .replace(/\\u002F/gi, '/')
+    .replace(/\\u002f/gi, '/')
     .replace(/\\\//g, '/')
     .trim();
 
@@ -80,9 +87,7 @@ function cleanUrl(value) {
       return null;
     }
 
-    if (UI_ASSET_RE.test(url.pathname)) {
-      return null;
-    }
+    if (UI_ASSET_RE.test(url.pathname)) return null;
 
     url.hash = '';
 
@@ -99,20 +104,13 @@ function* walk(node) {
     const current = stack.pop();
 
     if (Array.isArray(current)) {
-      for (const value of current) {
-        stack.push(value);
-      }
-
+      for (const value of current) stack.push(value);
       continue;
     }
 
     if (current && typeof current === 'object') {
       yield current;
-
-      for (const value of Object.values(current)) {
-        stack.push(value);
-      }
-
+      for (const value of Object.values(current)) stack.push(value);
       continue;
     }
 
@@ -130,54 +128,37 @@ function* walk(node) {
 }
 
 function area(item) {
-  return (
-    (item?.width || 0) *
-    (item?.height || 0)
-  );
+  return (item?.width || 0) * (item?.height || 0);
 }
 
 function biggest(list) {
   const items = (list || []).filter(
-    item => item &&
-      typeof item.url === 'string' &&
-      item.url
+    item => item && typeof item.url === 'string' && item.url
   );
 
   if (!items.length) return null;
 
-  return items.reduce((a, b) =>
-    area(b) > area(a) ? b : a
-  );
+  return items.reduce((a, b) => (area(b) > area(a) ? b : a));
 }
 
 function pickVideoVersion(list) {
   const items = (list || []).filter(
-    item => item &&
-      typeof item.url === 'string' &&
-      item.url
+    item => item && typeof item.url === 'string' && item.url
   );
 
   if (!items.length) return null;
 
   const rank = item => {
-    const type = String(
-      item.type == null ? '' : item.type
-    ).toUpperCase();
-
+    const type = String(item.type == null ? '' : item.type).toUpperCase();
     if (type.includes('640_HIGH')) return 3;
     if (type.includes('480_HIGH')) return 2;
     if (type.includes('HIGH')) return 1;
-
     return 0;
   };
 
   return items.reduce((a, b) => {
     const difference = rank(b) - rank(a);
-
-    if (difference !== 0) {
-      return difference > 0 ? b : a;
-    }
-
+    if (difference !== 0) return difference > 0 ? b : a;
     return area(b) > area(a) ? b : a;
   });
 }
@@ -187,38 +168,87 @@ function resolveShortcode(input) {
   const match = SHORTCODE_RE.exec(value);
 
   if (match) return match[1];
-
-  if (/^[A-Za-z0-9_-]{5,}$/.test(value)) {
-    return value;
-  }
+  if (/^[A-Za-z0-9_-]{5,}$/.test(value)) return value;
 
   throw new Error('No encuentro un shortcode válido en el enlace.');
 }
 
-async function fetchHtml(url) {
+async function fetchResp(url, kind) {
   const headers = {
     'User-Agent': UA,
     'Accept':
-      'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      kind === 'json'
+        ? 'application/json, */*;q=0.1'
+        : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'es-CO,es;q=0.9,en;q=0.8',
     'Referer': BASE + '/'
   };
 
-  if (COOKIE) {
-    headers.Cookie = COOKIE;
-  }
+  if (COOKIE) headers.Cookie = COOKIE;
 
-  const response = await fetch(url, {
+  return fetch(url, {
     headers,
     redirect: 'follow',
     signal: AbortSignal.timeout(TIMEOUT)
   });
+}
 
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status} en ${url}`);
+// Extrae o primeiro {…} balanceado que aparece despois do marcador.
+// Serve para ler window.__additionalDataLoaded(...) do embed, que non é JSON puro.
+function extractJsonAfter(text, marker) {
+  const idx = text.indexOf(marker);
+  if (idx === -1) return null;
+
+  const start = text.indexOf('{', idx);
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (c === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (c === '"') inString = false;
+      continue;
+    }
+
+    if (c === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) {
+        try {
+          return JSON.parse(text.slice(start, i + 1));
+        } catch {
+          return null;
+        }
+      }
+    }
   }
 
-  return response.text();
+  return null;
+}
+
+function extractEmbedJson(html) {
+  return (
+    extractJsonAfter(html, '__additionalDataLoaded') ||
+    extractJsonAfter(html, 'shortcode_media') ||
+    null
+  );
 }
 
 function parseMetas(html) {
@@ -229,25 +259,15 @@ function parseMetas(html) {
     const attrs = {};
 
     ATTR_RE.lastIndex = 0;
-
     let match;
 
     while ((match = ATTR_RE.exec(tag))) {
-      attrs[match[1].toLowerCase()] =
-        decodeEntities(match[2]);
+      attrs[match[1].toLowerCase()] = decodeEntities(match[2]);
     }
 
-    const key = (
-      attrs.property ||
-      attrs.name ||
-      ''
-    ).toLowerCase();
+    const key = (attrs.property || attrs.name || '').toLowerCase();
 
-    if (
-      key &&
-      attrs.content &&
-      output[key] === undefined
-    ) {
+    if (key && attrs.content && output[key] === undefined) {
       output[key] = attrs.content;
     }
   }
@@ -255,30 +275,89 @@ function parseMetas(html) {
   return output;
 }
 
-function extractMedia(html) {
+function collect(obj, meta, add) {
+  if (typeof obj.__isXIGPolarisMedia === 'string') {
+    meta.typename = obj.__isXIGPolarisMedia;
+  }
+
+  if (
+    typeof obj.__typename === 'string' &&
+    obj.__typename.includes('XIGPolaris')
+  ) {
+    meta.typename = obj.__typename;
+  }
+
+  if (
+    typeof obj.code === 'string' &&
+    /^[A-Za-z0-9_-]{5,}$/.test(obj.code)
+  ) {
+    meta.code = obj.code;
+  }
+
+  if (Array.isArray(obj.video_versions) && obj.video_versions.length) {
+    const best = pickVideoVersion(obj.video_versions);
+    if (best) {
+      add('video', best.url, 'video_versions', {
+        width: best.width,
+        height: best.height,
+        vtype: best.type
+      });
+    }
+  }
+
+  if (typeof obj.video_url === 'string') {
+    add('video', obj.video_url, 'video_url');
+  }
+
+  if (
+    obj.image_versions2 &&
+    Array.isArray(obj.image_versions2.candidates)
+  ) {
+    const best = biggest(obj.image_versions2.candidates);
+    if (best) {
+      add('image', best.url, 'image_versions2', {
+        width: best.width,
+        height: best.height
+      });
+    }
+  }
+
+  if (typeof obj.display_url === 'string') {
+    add('image', obj.display_url, 'display_url');
+  }
+
+  if (typeof obj.display_uri === 'string') {
+    add('image', obj.display_uri, 'display_uri');
+  }
+
+  // video_image.uri: dato confirmado no preloader público desta captura.
+  if (obj.video_image && typeof obj.video_image.uri === 'string') {
+    add('image', obj.video_image.uri, 'video_image.uri', {
+      width: obj.video_image.width,
+      height: obj.video_image.height
+    });
+  }
+
+  // carousel_media: o walk xa entra en cada slide, cada un cos seus
+  // video_versions / image_versions2 propios.
+}
+
+function extractMedia(html, data) {
   const media = [];
   const seen = new Set();
   const meta = {};
 
   const add = (type, rawUrl, source, extra) => {
     const url = cleanUrl(rawUrl);
-
     if (!url || seen.has(url)) return;
 
     seen.add(url);
 
-    const item = {
-      type,
-      url,
-      source
-    };
+    const item = { type, url, source };
 
     if (extra) {
       for (const key of Object.keys(extra)) {
-        if (
-          extra[key] !== undefined &&
-          extra[key] !== null
-        ) {
+        if (extra[key] !== undefined && extra[key] !== null) {
           item[key] = extra[key];
         }
       }
@@ -287,190 +366,107 @@ function extractMedia(html) {
     media.push(item);
   };
 
-  // Portada de la publicación.
-  const metas = parseMetas(html);
+  // 1) Metas (cando hai html): portada real, og:video non existe nesta ruta.
+  if (html) {
+    const metas = parseMetas(html);
+    add('image', metas['og:image'], 'meta:og:image');
+  }
 
-  add(
-    'image',
-    metas['og:image'],
-    'meta:og:image'
-  );
+  // 2) <script> inline co preloader Relay (só no html).
+  if (html) {
+    SCRIPT_RE.lastIndex = 0;
+    let match;
 
-  // Datos JSON de Instagram.
-  let match;
+    while ((match = SCRIPT_RE.exec(html))) {
+      const attrs = match[1];
+      const body = match[2];
 
-  SCRIPT_RE.lastIndex = 0;
-
-  while ((match = SCRIPT_RE.exec(html))) {
-    const attrs = match[1];
-    const body = match[2];
-
-    const isJson =
-      /type\s*=\s*"application\/json"/i.test(attrs);
-
-    if (
-      !isJson &&
-      !body.includes('__bbox') &&
-      !body.includes('xig_polaris_media')
-    ) {
-      continue;
-    }
-
-    let data;
-
-    try {
-      data = JSON.parse(body);
-    } catch {
-      continue;
-    }
-
-    for (const item of walk(data)) {
-      // Tipo de publicación.
-      if (typeof item.__isXIGPolarisMedia === 'string') {
-        meta.typename = item.__isXIGPolarisMedia;
-      }
+      const isJson = /type\s*=\s*"application\/json"/i.test(attrs);
 
       if (
-        typeof item.__typename === 'string' &&
-        item.__typename.includes('XIGPolaris')
+        !isJson &&
+        !body.includes('__bbox') &&
+        !body.includes('xig_polaris_media')
       ) {
-        meta.typename = item.__typename;
+        continue;
       }
 
-      if (
-        typeof item.code === 'string' &&
-        /^[A-Za-z0-9_-]{5,}$/.test(item.code)
-      ) {
-        meta.code = item.code;
+      let parsed;
+
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        continue;
       }
 
-      // Vídeos.
-      if (
-        Array.isArray(item.video_versions) &&
-        item.video_versions.length
-      ) {
-        const best = pickVideoVersion(
-          item.video_versions
-        );
-
-        if (best) {
-          add(
-            'video',
-            best.url,
-            'video_versions',
-            {
-              width: best.width,
-              height: best.height,
-              vtype: best.type
-            }
-          );
-        }
-      }
-
-      if (typeof item.video_url === 'string') {
-        add(
-          'video',
-          item.video_url,
-          'video_url'
-        );
-      }
-
-      // Fotografías.
-      if (
-        item.image_versions2 &&
-        Array.isArray(item.image_versions2.candidates)
-      ) {
-        const best = biggest(
-          item.image_versions2.candidates
-        );
-
-        if (best) {
-          add(
-            'image',
-            best.url,
-            'image_versions2',
-            {
-              width: best.width,
-              height: best.height
-            }
-          );
-        }
-      }
-
-      if (typeof item.display_uri === 'string') {
-        add(
-          'image',
-          item.display_uri,
-          'display_uri'
-        );
-      }
-
-      if (typeof item.display_url === 'string') {
-        add(
-          'image',
-          item.display_url,
-          'display_url'
-        );
-      }
-
-      // Portada del vídeo.
-      if (
-        item.video_image &&
-        typeof item.video_image.uri === 'string'
-      ) {
-        add(
-          'image',
-          item.video_image.uri,
-          'video_image.uri',
-          {
-            width: item.video_image.width,
-            height: item.video_image.height
-          }
-        );
+      for (const item of walk(parsed)) {
+        collect(item, meta, add);
       }
     }
   }
 
-  // Los vídeos aparecen primero.
-  media.sort((a, b) => {
-    if (a.type !== b.type) {
-      return a.type === 'video' ? -1 : 1;
+  // 3) JSON xa parseado (API ?__a=1 ou embed).
+  if (data) {
+    for (const item of walk(data)) {
+      collect(item, meta, add);
     }
+  }
 
+  media.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'video' ? -1 : 1;
     return area(b) - area(a);
   });
 
   const limited = media.slice(0, MAX_MEDIA);
-
   limited.forEach((item, index) => {
     item.index = index + 1;
   });
 
-  return {
-    media: limited,
-    meta
-  };
+  return { media: limited, meta };
 }
 
 async function igMedia(input) {
   const shortcode = resolveShortcode(input);
-  let lastError = null;
+  const errors = [];
 
-  for (const kind of ['reel', 'p']) {
-    const url = `${BASE}/${kind}/${shortcode}/`;
+  for (const candidato of CANDIDATOS) {
+    const url = candidato.build(shortcode);
 
     try {
-      const html = await fetchHtml(url);
+      const response = await fetchResp(url, candidato.kind);
 
-      const {
-        media,
-        meta
-      } = extractMedia(html);
+      if (!response.ok) {
+        errors.push(`${url} → HTTP ${response.status}`);
+        continue;
+      }
+
+      const contentType =
+        (response.headers.get('content-type') || '').toLowerCase();
+
+      let html = null;
+      let data = null;
+
+      if (
+        candidato.kind === 'json' ||
+        contentType.includes('application/json')
+      ) {
+        try {
+          data = await response.json();
+        } catch (error) {
+          errors.push(`${url} → JSON inválido: ${error.message}`);
+          continue;
+        }
+      } else {
+        html = await response.text();
+        if (candidato.kind === 'embed') {
+          data = extractEmbedJson(html);
+        }
+      }
+
+      const { media, meta } = extractMedia(html, data);
 
       if (!media.length) {
-        lastError =
-          `HTTP 200, pero no se encontraron datos multimedia en ${url}`;
-
+        errors.push(`${url} → sen media`);
         continue;
       }
 
@@ -478,17 +474,13 @@ async function igMedia(input) {
 
       if (!media.some(item => item.type === 'video')) {
         notes.push(
-          'No se encontraron video_versions. Solo se obtuvo contenido de imagen o portada.'
+          'Sen video_versions nin video_url no payload: só portada. ' +
+            'Con IG_COOKIE (sessionid dunha conta) adoita saír o vídeo.'
         );
       }
 
-      if (
-        meta.typename &&
-        /Carousel/i.test(meta.typename)
-      ) {
-        notes.push(
-          'La publicación parece ser un carrusel.'
-        );
+      if (meta.typename && /Carousel/i.test(meta.typename)) {
+        notes.push('É un carrusel: cada slide trae o seu propio vídeo/foto.');
       }
 
       return {
@@ -496,15 +488,15 @@ async function igMedia(input) {
         platform: 'instagram',
         shortcode,
         url,
+        source: candidato.kind,
         typename: meta.typename || null,
         total: media.length,
         media,
         notes,
-        extractionMethod: 'relay-preloader'
+        extractionMethod: `relay-preloader+${candidato.kind}`
       };
-
     } catch (error) {
-      lastError = error.message || String(error);
+      errors.push(`${url} → ${error.message || String(error)}`);
     }
   }
 
@@ -512,15 +504,14 @@ async function igMedia(input) {
     status: false,
     platform: 'instagram',
     shortcode,
-    error: lastError ||
-      'No se encontró contenido multimedia.'
+    error: errors.join(' | ') || 'Non se atopou contido multimedia.'
   };
 }
 
 export default {
-  name: ['test'],
-  description: 'Extrae vídeos e imágenes de Instagram.',
-  category: 'owner',
+  name: ['ig', 'instagram'],
+  description: 'Extrae vídeos e imaxes de Instagram.',
+  category: 'downloader',
   groupOnly: false,
   ownerOnly: true,
 
@@ -538,14 +529,11 @@ export default {
 
       const result = await igMedia(input);
 
-      await reply(
-        JSON.stringify(result, null, 2)
-      );
+      await reply(JSON.stringify(result, null, 2));
 
       if (react) {
         await react(result.status ? '✅' : '⚠️');
       }
-
     } catch (error) {
       const result = {
         status: false,
@@ -553,9 +541,7 @@ export default {
         error: error.message || 'Error desconocido'
       };
 
-      await reply(
-        JSON.stringify(result, null, 2)
-      );
+      await reply(JSON.stringify(result, null, 2));
 
       if (react) {
         await react('❌').catch(() => {});
