@@ -207,6 +207,15 @@ async function fetchResp(url, kind) {
   });
 }
 
+function parseInstagramJson(raw) {
+  const cleaned = String(raw)
+    .replace(/^\s*for\s*\(\s*;;\s*\)\s*;\s*/, '')
+    .replace(/^\s*while\s*\(\s*1\s*\)\s*;\s*/, '')
+    .trim();
+
+  return JSON.parse(cleaned);
+}
+
 function extractJsonAfter(text, marker) {
   const idx = text.indexOf(marker);
 
@@ -598,7 +607,8 @@ async function igMedia(input) {
         contentType.includes('application/json')
       ) {
         try {
-          data = await response.json();
+          const raw = await response.text();
+          data = parseInstagramJson(raw);
         } catch (error) {
           errors.push(
             `${url} → JSON inválido: ${error.message}`
