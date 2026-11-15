@@ -340,9 +340,9 @@ function buildErrorJSON(error) {
 }
 
 export default {
-  name: ['ig', 'instagram'],
+  name: ['test'],
   description: 'Obtiene los enlaces multimedia de publicaciones y Reels de Instagram.',
-  category: 'downloader',
+  category: 'owner',
   groupOnly: false,
   ownerOnly: true,
 
