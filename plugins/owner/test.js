@@ -1,27 +1,31 @@
 
 const IG = 'https://www.instagram.com';
-const TIMEOUT = 20000;
-const MAX_MEDIA = 20;
+const TIMEOUT = 30000;
+const MAX_VIDEOS = 20;
 
 const UA =
   'Mozilla/5.0 (Linux; Android 11; moto g(9) play Build/RPXS31.Q2-58-17-7-3; wv) ' +
   'AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/157.0.8103.40 Mobile Safari/537.36';
 
-const ACCEPT =
-  'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8';
-
 const HEADERS = {
-  'user-agent': UA,
-  accept: ACCEPT,
-  dpr: '2.012500047683716',
-  'viewport-width': '980',
+  'User-Agent': UA,
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'es-CO,es;q=0.9',
 };
 
 const RE_URL = /instagram\.com\/(p|reel|reels|tv)\/([A-Za-z0-9_-]+)/i;
-const RE_SCRIPT = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
 
-function obtenerEntrada(args, text) {
-  return String(text || args?.join(' ') || '').trim();
+const RE_VERSIONS =
+  /"video_versions"\s*:\s*(\[.*?\])\s*,\s*"is_dash_eligible"/gs;
+
+const RE_DASH =
+  /"video_dash_manifest"\s*:\s*"((?:[^"\\]|\\.)*)"/s;
+
+const RE_VIDEO_URL =
+  /"video_url"\s*:\s*"((?:[^"\\]|\\.)*)"/s;
+
+function obtenerEntrada(args) {
+  return String(args?.join(' ') || '').trim();
 }
 
 function extraerShortcode(entrada) {
@@ -41,119 +45,50 @@ function extraerShortcode(entrada) {
   }
 
   if (/^[A-Za-z0-9_-]{5,20}$/.test(entrada)) {
-    return { shortcode: entrada, tipoRuta: 'reel' };
+    return {
+      shortcode: entrada,
+      tipoRuta: 'reel',
+    };
   }
 
   return null;
 }
 
-async function obtenerCookiesAnonimas() {
-  try {
-    const response = await fetch(`${IG}/`, {
-      headers: HEADERS,
-      redirect: 'follow',
-      signal: AbortSignal.timeout(15000),
-    });
-
-    const cookies = typeof response.headers.getSetCookie === 'function'
-      ? response.headers.getSetCookie()
-      : (response.headers.get('set-cookie') || '')
-          .split(/,(?=\s*[A-Za-z0-9_-]+=)/);
-
-    return cookies
-      .map(cookie => cookie.split(';')[0].trim())
-      .filter(Boolean)
-      .join('; ');
-  } catch {
-    return '';
-  }
-}
-
-async function obtenerHTML(shortcode, tipoRuta, cookies) {
+async function obtenerHTML(shortcode, tipoRuta) {
   const url = `${IG}/${tipoRuta}/${shortcode}/`;
-  const headers = { ...HEADERS };
-
-  if (cookies) headers.cookie = cookies;
 
   const response = await fetch(url, {
-    headers,
+    method: 'GET',
+    headers: HEADERS,
     redirect: 'follow',
     signal: AbortSignal.timeout(TIMEOUT),
   });
 
+  const html = await response.text();
+
   return {
     url,
     status: response.status,
-    html: await response.text(),
+    html,
   };
 }
 
-function* obtenerScriptsJSON(html) {
-  RE_SCRIPT.lastIndex = 0;
-
-  let match;
-
-  while ((match = RE_SCRIPT.exec(html)) !== null) {
-    const atributos = match[1] || '';
-
-    if (!/data-sjs/i.test(atributos)) continue;
-    if (!/application\/json/i.test(atributos)) continue;
-
-    const contenido = (match[2] || '').trim();
-    if (!contenido) continue;
-
-    try {
-      yield JSON.parse(contenido);
-    } catch {}
+function decodificarString(valor) {
+  try {
+    return JSON.parse(`"${valor}"`);
+  } catch {
+    return null;
   }
-}
-
-function recorrer(nodo, visitar, vistos = new Set()) {
-  if (!nodo || typeof nodo !== 'object' || vistos.has(nodo)) return;
-
-  vistos.add(nodo);
-
-  if (Array.isArray(nodo)) {
-    for (const elemento of nodo) {
-      recorrer(elemento, visitar, vistos);
-    }
-    return;
-  }
-
-  visitar(nodo);
-
-  for (const clave of Object.keys(nodo)) {
-    recorrer(nodo[clave], visitar, vistos);
-  }
-}
-
-function mejorVideo(lista) {
-  if (!Array.isArray(lista)) return null;
-
-  return lista
-    .filter(item => item && typeof item.url === 'string')
-    .sort((a, b) =>
-      ((b.width || 0) * (b.height || 0)) -
-      ((a.width || 0) * (a.height || 0))
-    )[0] || null;
-}
-
-function mejorImagen(lista) {
-  if (!Array.isArray(lista)) return null;
-
-  return lista
-    .filter(item => item && typeof item.url === 'string')
-    .sort((a, b) =>
-      ((b.width || 0) * (b.height || 0)) -
-      ((a.width || 0) * (a.height || 0))
-    )[0] || null;
 }
 
 function limpiarURL(url) {
   if (typeof url !== 'string') return null;
 
   try {
-    const parsed = new URL(url);
+    const parsed = new URL(
+      url.replace(/&amp;/g, '&')
+    );
+
     const host = parsed.hostname.toLowerCase();
 
     const permitido =
@@ -163,7 +98,6 @@ function limpiarURL(url) {
       host.endsWith('.fbcdn.net');
 
     if (!permitido) return null;
-    if (/\/(?:rsrc\.php|static)\//i.test(parsed.pathname)) return null;
 
     return parsed.href;
   } catch {
@@ -171,134 +105,93 @@ function limpiarURL(url) {
   }
 }
 
-function obtenerItem(nodo) {
-  if (!nodo || typeof nodo !== 'object') return null;
+function extraerVersiones(html) {
+  let mejores = [];
 
-  const video = mejorVideo(nodo.video_versions);
-  const imagen = mejorImagen(nodo.image_versions2?.candidates);
+  RE_VERSIONS.lastIndex = 0;
 
-  if (video) {
-    const url = limpiarURL(video.url);
-    if (!url) return null;
+  for (const match of html.matchAll(RE_VERSIONS)) {
+    try {
+      const versiones = JSON.parse(match[1]);
 
-    return {
-      tipo: 'video',
-      url,
+      if (
+        Array.isArray(versiones) &&
+        versiones.length > mejores.length
+      ) {
+        mejores = versiones;
+      }
+    } catch {}
+  }
+
+  return mejores
+    .map(video => ({
+      tipo: video.type ?? null,
       ancho: video.width ?? null,
       alto: video.height ?? null,
-      imagen_previa: limpiarURL(imagen?.url),
-    };
-  }
+      url: limpiarURL(video.url),
+    }))
+    .filter(video => video.url)
+    .slice(0, MAX_VIDEOS);
+}
 
-  if (imagen) {
-    const url = limpiarURL(imagen.url);
-    if (!url) return null;
+function extraerDASH(html) {
+  const match = html.match(RE_DASH);
 
-    return {
-      tipo: 'imagen',
-      url,
-      ancho: imagen.width ?? null,
-      alto: imagen.height ?? null,
-    };
-  }
+  if (!match) return null;
 
-  return null;
+  return decodificarString(match[1]);
+}
+
+function extraerVideoURL(html) {
+  const match = html.match(RE_VIDEO_URL);
+
+  if (!match) return null;
+
+  return limpiarURL(decodificarString(match[1]));
 }
 
 function extraerMedios(html) {
-  const meta = {
-    code: null,
-    media_id: null,
-    autor: null,
-    typename: null,
-  };
+  const versiones = extraerVersiones(html);
 
-  const medios = [];
-  const urlsVistas = new Set();
-  let carrusel = null;
+  const dash = extraerDASH(html);
 
-  function agregar(item) {
-    if (!item?.url || urlsVistas.has(item.url)) return;
-    if (medios.length >= MAX_MEDIA) return;
-
-    urlsVistas.add(item.url);
-    medios.push(item);
-  }
-
-  for (const payload of obtenerScriptsJSON(html)) {
-    recorrer(payload, nodo => {
-      if (!nodo || typeof nodo !== 'object') return;
-
-      if (
-        nodo.__typename?.startsWith?.('XIGPolaris') ||
-        nodo.if_not_gated_logged_out != null
-      ) {
-        meta.code ||= typeof nodo.code === 'string' ? nodo.code : null;
-        meta.media_id ||= nodo.media_id != null ? String(nodo.media_id) : null;
-        meta.autor ||= nodo.user?.username || null;
-        meta.typename ||= nodo.__typename || null;
-
-        if (
-          !carrusel &&
-          Array.isArray(nodo.carousel_media) &&
-          nodo.carousel_media.length
-        ) {
-          carrusel = nodo.carousel_media;
-        }
-      }
-
-      if (nodo.video_versions || nodo.image_versions2) {
-        agregar(obtenerItem(nodo));
-      }
-    });
-  }
-
-  if (carrusel?.length) {
-    const elementos = carrusel
-      .map(obtenerItem)
-      .filter(Boolean)
-      .slice(0, MAX_MEDIA);
-
-    if (elementos.length) {
-      return { meta, tipo: 'carrusel', medios: elementos };
-    }
-  }
-
-  if (medios.length) {
+  if (versiones.length) {
     return {
-      meta,
-      tipo: medios.length > 1 ? 'carrusel' : medios[0].tipo,
-      medios,
+      tipo: 'video',
+      medios: versiones,
+      dash_manifest: dash
+        ? dash.slice(0, 200)
+        : null,
     };
   }
 
-  const og = html.match(
-    /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i
-  );
+  const videoURL = extraerVideoURL(html);
 
-  if (og) {
-    const url = limpiarURL(og[1].replace(/&amp;/g, '&'));
-
-    if (url) {
-      return {
-        meta,
-        tipo: 'imagen',
-        medios: [{
-          tipo: 'imagen',
-          url,
-          ancho: null,
-          alto: null,
-        }],
-      };
-    }
+  if (videoURL) {
+    return {
+      tipo: 'video',
+      medios: [{
+        tipo: null,
+        ancho: null,
+        alto: null,
+        url: videoURL,
+      }],
+      dash_manifest: dash
+        ? dash.slice(0, 200)
+        : null,
+    };
   }
 
-  return { meta, tipo: null, medios: [] };
+  return {
+    tipo: null,
+    medios: [],
+    dash_manifest: null,
+  };
 }
 
 export default {
   name: ['test'],
-  description: 'Extrae URLs multimedia de publicaciones públicas de Instagram.',
+  description: 'Extrae las URL directas de vídeos de Instagram.',
   category: 'owner',
   ownerOnly: true,
   groupOnly: false,
@@ -310,9 +203,15 @@ export default {
     const responder = async objeto => {
       const json = JSON.stringify(objeto, null, 2);
 
-      if (typeof reply === 'function') return reply(json);
+      if (typeof reply === 'function') {
+        return reply(json);
+      }
 
-      return sock.sendMessage(from, { text: json }, { quoted: msg });
+      return sock.sendMessage(
+        from,
+        { text: json },
+        { quoted: msg }
+      );
     };
 
     if (!datos) {
@@ -320,17 +219,21 @@ export default {
         ok: false,
         platform: 'instagram',
         error: 'URL o shortcode inválido.',
-        ejemplo: '.test https://www.instagram.com/reel/SHORTCODE/',
+        example: '.test https://www.instagram.com/reel/SHORTCODE/',
       });
     }
 
     const { shortcode, tipoRuta } = datos;
 
     try {
-      if (typeof react === 'function') await react('⏳');
+      if (typeof react === 'function') {
+        await react('⏳');
+      }
 
-      const cookies = await obtenerCookiesAnonimas();
-      const resultado = await obtenerHTML(shortcode, tipoRuta, cookies);
+      const resultado = await obtenerHTML(
+        shortcode,
+        tipoRuta
+      );
 
       if (resultado.status !== 200) {
         return responder({
@@ -350,12 +253,12 @@ export default {
           platform: 'instagram',
           shortcode,
           status: resultado.status,
-          error: 'No se encontraron datos multimedia en el HTML.',
+          error: 'No se encontraron video_versions ni video_url en el HTML.',
           diagnostic: {
             htmlLength: resultado.html.length,
-            hasDataSjs: /data-sjs/i.test(resultado.html),
-            hasPolaris: /xig_polaris_media|XIGPolaris/i.test(resultado.html),
-            possibleLoginWall: /login_required|accounts\/login/i.test(resultado.html),
+            hasVideoVersions: /"video_versions"/.test(resultado.html),
+            hasVideoUrl: /"video_url"/.test(resultado.html),
+            hasDashManifest: /"video_dash_manifest"/.test(resultado.html),
           },
         });
       }
@@ -363,13 +266,11 @@ export default {
       return responder({
         ok: true,
         platform: 'instagram',
-        shortcode: extraido.meta.code || shortcode,
+        shortcode,
         type: extraido.tipo,
-        author: extraido.meta.autor,
-        media_id: extraido.meta.media_id,
-        typename: extraido.meta.typename,
         total: extraido.medios.length,
         media: extraido.medios,
+        dash_manifest: extraido.dash_manifest,
       });
 
     } catch (error) {
