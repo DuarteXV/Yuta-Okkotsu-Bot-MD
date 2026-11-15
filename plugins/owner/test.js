@@ -18,11 +18,12 @@ const ATTR_RE = /([\w:.-]+)\s*=\s*"([^"]*)"/g;
 const UI_ASSET_RE = /\/rsrc\.php\//i;
 
 const CANDIDATOS = [
+  { kind: 'embed', build: sc => `${BASE}/p/${sc}/embed/captioned/` },
+  { kind: 'embed', build: sc => `${BASE}/reel/${sc}/embed/captioned/` },
+  { kind: 'embed', build: sc => `${BASE}/p/${sc}/embed/` },
   { kind: 'html', build: sc => `${BASE}/reel/${sc}/` },
   { kind: 'html', build: sc => `${BASE}/p/${sc}/` },
-  { kind: 'json', build: sc => `${BASE}/p/${sc}/?__a=1&__d=disco` },
-  { kind: 'json', build: sc => `${BASE}/p/${sc}/?__a=1` },
-  { kind: 'embed', build: sc => `${BASE}/p/${sc}/embed/captioned/` }
+  { kind: 'json', build: sc => `${BASE}/p/${sc}/?__a=1&__d=disco` }
 ];
 
 function decodeEntities(value) {
@@ -47,11 +48,7 @@ function decodeEntities(value) {
           ? parseInt(name.slice(2), 16)
           : parseInt(name.slice(1), 10);
 
-        if (
-          Number.isFinite(number) &&
-          number >= 0 &&
-          number <= 0x10ffff
-        ) {
+        if (Number.isFinite(number) && number >= 0 && number <= 0x10ffff) {
           try {
             return String.fromCodePoint(number);
           } catch {}
@@ -82,9 +79,7 @@ function cleanUrl(value) {
     if (
       !host.endsWith('cdninstagram.com') &&
       !host.endsWith('fbcdn.net')
-    ) {
-      return null;
-    }
+    ) return null;
 
     if (UI_ASSET_RE.test(url.pathname)) return null;
 
@@ -141,9 +136,9 @@ function biggest(list) {
 
   if (!items.length) return null;
 
-  return items.reduce((a, b) =>
+  return items.reduce((a, b) => (
     area(b) > area(a) ? b : a
-  );
+  ));
 }
 
 function pickVideoVersion(list) {
@@ -186,7 +181,9 @@ function resolveShortcode(input) {
     return value;
   }
 
-  throw new Error('No encuentro un shortcode válido en el enlace.');
+  throw new Error(
+    'No encuentro un shortcode válido en el enlace.'
+  );
 }
 
 async function fetchResp(url, kind) {
@@ -211,11 +208,20 @@ async function fetchResp(url, kind) {
 }
 
 function extractJsonAfter(text, marker) {
-  const index = text.indexOf(marker);
+  const idx = text.indexOf(marker);
 
-  if (index === -1) return null;
+  if (idx === -1) return null;
 
-  const start = text.indexOf('{', index);
+  const tail = text.slice(
+    idx + marker.length,
+    idx + marker.length + 20
+  );
+
+  if (/^\s*=\s*function/.test(tail)) {
+    return null;
+  }
+
+  const start = text.indexOf('{', idx);
 
   if (start === -1) return null;
 
@@ -224,7 +230,7 @@ function extractJsonAfter(text, marker) {
   let escaped = false;
 
   for (let i = start; i < text.length; i++) {
-    const char = text[i];
+    const c = text[i];
 
     if (inString) {
       if (escaped) {
@@ -232,26 +238,26 @@ function extractJsonAfter(text, marker) {
         continue;
       }
 
-      if (char === '\\') {
+      if (c === '\\') {
         escaped = true;
         continue;
       }
 
-      if (char === '"') {
+      if (c === '"') {
         inString = false;
       }
 
       continue;
     }
 
-    if (char === '"') {
+    if (c === '"') {
       inString = true;
       continue;
     }
 
-    if (char === '{') {
+    if (c === '{') {
       depth++;
-    } else if (char === '}') {
+    } else if (c === '}') {
       depth--;
 
       if (depth === 0) {
@@ -268,11 +274,36 @@ function extractJsonAfter(text, marker) {
 }
 
 function extractEmbedJson(html) {
-  return (
-    extractJsonAfter(html, '__additionalDataLoaded') ||
-    extractJsonAfter(html, 'shortcode_media') ||
-    null
+  let data = extractJsonAfter(
+    html,
+    '__additionalDataLoaded'
   );
+
+  if (data) return data;
+
+  data = extractJsonAfter(
+    html,
+    '"shortcode_media"'
+  );
+
+  if (data) return data;
+
+  data = extractJsonAfter(
+    html,
+    'contextJSON'
+  );
+
+  if (data) return data;
+
+  const match = /<script[^>]*type="application\/json"[^>]*>([\s\S]*?)<\/script>/i.exec(html);
+
+  if (match) {
+    try {
+      return JSON.parse(match[1]);
+    } catch {}
+  }
+
+  return null;
 }
 
 function parseMetas(html) {
@@ -287,8 +318,7 @@ function parseMetas(html) {
     let match;
 
     while ((match = ATTR_RE.exec(tag))) {
-      attrs[match[1].toLowerCase()] =
-        decodeEntities(match[2]);
+      attrs[match[1].toLowerCase()] = decodeEntities(match[2]);
     }
 
     const key = (
@@ -310,7 +340,9 @@ function parseMetas(html) {
 }
 
 function collect(obj, meta, add) {
-  if (typeof obj.__isXIGPolarisMedia === 'string') {
+  if (
+    typeof obj.__isXIGPolarisMedia === 'string'
+  ) {
     meta.typename = obj.__isXIGPolarisMedia;
   }
 
@@ -378,6 +410,58 @@ function collect(obj, meta, add) {
       height: obj.video_image.height
     });
   }
+
+  if (
+    Array.isArray(obj.display_resources) &&
+    obj.display_resources.length
+  ) {
+    const best = obj.display_resources
+      .filter(r => r && typeof r.src === 'string')
+      .reduce((a, b) => {
+        const areaA =
+          (a.config_width || 0) *
+          (a.config_height || 0);
+
+        const areaB =
+          (b.config_width || 0) *
+          (b.config_height || 0);
+
+        return areaB > areaA ? b : a;
+      }, {});
+
+    if (best.src) {
+      add('image', best.src, 'display_resources', {
+        width: best.config_width,
+        height: best.config_height
+      });
+    }
+  }
+
+  if (
+    Array.isArray(obj.video_resources) &&
+    obj.video_resources.length
+  ) {
+    const best = obj.video_resources
+      .filter(r => r && typeof r.src === 'string')
+      .reduce((a, b) => {
+        const areaA =
+          (a.config_width || 0) *
+          (a.config_height || 0);
+
+        const areaB =
+          (b.config_width || 0) *
+          (b.config_height || 0);
+
+        return areaB > areaA ? b : a;
+      }, {});
+
+    if (best.src) {
+      add('video', best.src, 'video_resources', {
+        width: best.config_width,
+        height: best.config_height
+      });
+    }
+  }
 }
 
 function extractMedia(html, data) {
@@ -420,7 +504,9 @@ function extractMedia(html, data) {
       metas['og:image'],
       'meta:og:image'
     );
+  }
 
+  if (html) {
     SCRIPT_RE.lastIndex = 0;
 
     let match;
@@ -484,17 +570,19 @@ async function igMedia(input) {
   const shortcode = resolveShortcode(input);
   const errors = [];
 
-  for (const candidate of CANDIDATOS) {
-    const url = candidate.build(shortcode);
+  for (const candidato of CANDIDATOS) {
+    const url = candidato.build(shortcode);
 
     try {
       const response = await fetchResp(
         url,
-        candidate.kind
+        candidato.kind
       );
 
       if (!response.ok) {
-        errors.push(`HTTP ${response.status}`);
+        errors.push(
+          `${url} → HTTP ${response.status}`
+        );
         continue;
       }
 
@@ -506,30 +594,29 @@ async function igMedia(input) {
       let data = null;
 
       if (
-        candidate.kind === 'json' ||
+        candidato.kind === 'json' ||
         contentType.includes('application/json')
       ) {
         try {
           data = await response.json();
-        } catch {
-          errors.push('Respuesta JSON inválida');
+        } catch (error) {
+          errors.push(
+            `${url} → JSON inválido: ${error.message}`
+          );
           continue;
         }
       } else {
         html = await response.text();
 
-        if (candidate.kind === 'embed') {
+        if (candidato.kind === 'embed') {
           data = extractEmbedJson(html);
         }
       }
 
-      const {
-        media,
-        meta
-      } = extractMedia(html, data);
+      const { media, meta } = extractMedia(html, data);
 
       if (!media.length) {
-        errors.push('Respuesta sin contenido multimedia');
+        errors.push(`${url} → sin media`);
         continue;
       }
 
@@ -537,7 +624,7 @@ async function igMedia(input) {
 
       if (!media.some(item => item.type === 'video')) {
         notes.push(
-          'No se encontraron video_versions ni video_url; se obtuvo solamente contenido de imagen o portada.'
+          'No se encontró una URL de vídeo en el contenido recibido; solo se obtuvo imagen o portada.'
         );
       }
 
@@ -545,23 +632,27 @@ async function igMedia(input) {
         meta.typename &&
         /Carousel/i.test(meta.typename)
       ) {
-        notes.push('La publicación parece ser un carrusel.');
+        notes.push(
+          'Es un carrusel: cada slide puede contener su propia foto o vídeo.'
+        );
       }
 
       return {
         status: true,
         platform: 'instagram',
         shortcode,
-        source: candidate.kind,
+        url,
+        source: candidato.kind,
         typename: meta.typename || null,
         total: media.length,
         media,
         notes,
-        extractionMethod: `relay-preloader+${candidate.kind}`
+        extractionMethod: `relay-preloader+${candidato.kind}`
       };
-
     } catch (error) {
-      errors.push(error.message || 'Error de conexión');
+      errors.push(
+        `${url} → ${error.message || String(error)}`
+      );
     }
   }
 
@@ -569,13 +660,14 @@ async function igMedia(input) {
     status: false,
     platform: 'instagram',
     shortcode,
-    error: errors.join(' | ') || 'No se encontró contenido multimedia.'
+    error: errors.join(' | ') ||
+      'No se encontró contenido multimedia.'
   };
 }
 
 export default {
   name: ['test'],
-  description: 'Prueba la extracción multimedia de Instagram.',
+  description: 'Extrae vídeos e imágenes de Instagram en formato JSON.',
   category: 'owner',
   groupOnly: false,
   ownerOnly: true,
@@ -601,13 +693,16 @@ export default {
       if (react) {
         await react(result.status ? '✅' : '⚠️');
       }
-
     } catch (error) {
-      await reply(JSON.stringify({
+      const result = {
         status: false,
         platform: 'instagram',
         error: error.message || 'Error desconocido'
-      }, null, 2));
+      };
+
+      await reply(
+        JSON.stringify(result, null, 2)
+      );
 
       if (react) {
         await react('❌').catch(() => {});
