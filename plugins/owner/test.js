@@ -1,91 +1,38 @@
 
-const BASE = 'https://www.instagram.com';
+const GRAPHQL_URL = 'https://www.instagram.com/graphql/query';
 const TIMEOUT = 25000;
 const MAX_MEDIA = 20;
 
-const UA =
-  'Mozilla/5.0 (Linux; Android 11; moto g(9) play) ' +
-  'AppleWebKit/537.36 (KHTML, like Gecko) ' +
-  'Chrome/120.0.0.0 Mobile Safari/537.36';
+// Identificadores de la consulta GraphQL observada en Instafetch.
+const DOC_ID = '8845758582119845';
+const APP_ID = '1217981644879628';
 
 const HEADERS = {
-  'User-Agent': UA,
-  'Accept': 'text/html,application/xhtml+xml,application/json,*/*',
+  'User-Agent':
+    'Mozilla/5.0 (Linux; Android 11; Mobile) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36',
+  'Accept': '*/*',
   'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
-  'Referer': `${BASE}/`,
-  'X-Requested-With': 'XMLHttpRequest'
+  'Content-Type': 'application/x-www-form-urlencoded',
+  'X-FB-Friendly-Name': 'PolarisPostActionLoadPostQueryQuery',
+  'X-IG-App-ID': APP_ID,
+  'X-FB-LSD': 'AVrqPT0gJDo',
+  'X-ASBD-ID': '359341',
+  'Origin': 'https://www.instagram.com',
+  'Referer': 'https://www.instagram.com/'
 };
-
-const CANDIDATOS = [
-  {
-    kind: 'embed',
-    build: sc => `${BASE}/p/${sc}/embed/captioned/`
-  },
-  {
-    kind: 'embed',
-    build: sc => `${BASE}/reel/${sc}/embed/captioned/`
-  },
-  {
-    kind: 'embed',
-    build: sc => `${BASE}/p/${sc}/embed/`
-  },
-  {
-    kind: 'html',
-    build: sc => `${BASE}/reel/${sc}/`
-  },
-  {
-    kind: 'html',
-    build: sc => `${BASE}/p/${sc}/`
-  },
-  {
-    kind: 'json',
-    build: sc => `${BASE}/p/${sc}/?__a=1&__d=disco`
-  }
-];
 
 function extractShortcode(input) {
   const text = String(input || '').trim();
 
-  if (!text) return null;
+  if (/^[A-Za-z0-9_-]{5,}$/.test(text)) {
+    return text;
+  }
 
-  // Busca un enlace de Instagram dentro del texto recibido.
-  const matchUrl = text.match(
-    /(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:reel|p|tv)\/[A-Za-z0-9_-]+\/?/i
+  const match = text.match(
+    /(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:reel|p|tv)\/([A-Za-z0-9_-]+)\/?/i
   );
 
-  if (!matchUrl) {
-    // También permite recibir directamente el shortcode.
-    if (/^[A-Za-z0-9_-]{5,}$/.test(text)) {
-      return text;
-    }
-
-    return null;
-  }
-
-  try {
-    const url = new URL(
-      /^https?:\/\//i.test(matchUrl[0])
-        ? matchUrl[0]
-        : `https://${matchUrl[0]}`
-    );
-
-    const hostname = url.hostname.toLowerCase();
-
-    if (
-      hostname !== 'instagram.com' &&
-      !hostname.endsWith('.instagram.com')
-    ) {
-      return null;
-    }
-
-    const match = url.pathname.match(
-      /^\/(?:reel|p|tv)\/([A-Za-z0-9_-]+)\/?$/
-    );
-
-    return match?.[1] || null;
-  } catch {
-    return null;
-  }
+  return match?.[1] || null;
 }
 
 function cleanUrl(value) {
@@ -105,18 +52,9 @@ function cleanUrl(value) {
 
     const allowed =
       host.endsWith('cdninstagram.com') ||
-      host.endsWith('fbcdn.net') ||
-      host === 'instagram.com' ||
-      host.endsWith('.instagram.com');
+      host.endsWith('fbcdn.net');
 
     if (!allowed) return null;
-
-    if (
-      parsed.pathname.includes('/rsrc.php/') ||
-      parsed.pathname.includes('/static/')
-    ) {
-      return null;
-    }
 
     return parsed.href;
   } catch {
@@ -124,7 +62,91 @@ function cleanUrl(value) {
   }
 }
 
-function parseInstagramJson(raw) {
+function addMedia(output, type, value, extra = {}) {
+  const url = cleanUrl(value);
+
+  if (!url) return;
+  if (output.some(item => item.url === url)) return;
+
+  output.push({
+    type,
+    url,
+    ...extra
+  });
+}
+
+function extractMedia(media) {
+  const output = [];
+
+  if (!media || typeof media !== 'object') {
+    return output;
+  }
+
+  // Video principal.
+  if (media.video_url) {
+    addMedia(output, 'video', media.video_url);
+  }
+
+  // Variantes de video.
+  if (Array.isArray(media.video_versions)) {
+    for (const item of media.video_versions) {
+      addMedia(output, 'video', item?.url, {
+        width: item?.width || null,
+        height: item?.height || null
+      });
+    }
+  }
+
+  // Imagen principal.
+  if (media.display_url) {
+    addMedia(output, 'image', media.display_url);
+  }
+
+  if (media.display_uri) {
+    addMedia(output, 'image', media.display_uri);
+  }
+
+  // Variantes de imagen.
+  const candidates = media.image_versions2?.candidates;
+
+  if (Array.isArray(candidates)) {
+    for (const item of candidates) {
+      addMedia(output, 'image', item?.url, {
+        width: item?.width || null,
+        height: item?.height || null
+      });
+    }
+  }
+
+  // Carrusel.
+  if (Array.isArray(media.carousel_media)) {
+    for (const child of media.carousel_media) {
+      const childMedia = extractMedia(child);
+
+      for (const item of childMedia) {
+        addMedia(output, item.type, item.url, {
+          width: item.width,
+          height: item.height
+        });
+      }
+    }
+  }
+
+  return output.slice(0, MAX_MEDIA);
+}
+
+function findMedia(data) {
+  return (
+    data?.data?.xdt_shortcode_media ||
+    data?.data?.shortcode_media ||
+    data?.graphql?.shortcode_media ||
+    data?.xdt_shortcode_media ||
+    data?.shortcode_media ||
+    null
+  );
+}
+
+function parseResponse(raw) {
   const cleaned = String(raw)
     .replace(/^\s*for\s*\(\s*;;\s*\)\s*;\s*/, '')
     .replace(/^\s*while\s*\(\s*1\s*\)\s*;\s*/, '')
@@ -133,309 +155,7 @@ function parseInstagramJson(raw) {
   return JSON.parse(cleaned);
 }
 
-function addMedia(output, type, value) {
-  const url = cleanUrl(value);
-
-  if (!url) return;
-  if (output.some(item => item.url === url)) return;
-
-  output.push({ type, url });
-}
-
-function walk(value, output, depth = 0) {
-  if (!value || depth > 18 || output.length >= MAX_MEDIA) return;
-
-  if (typeof value === 'string') {
-    const text = value.trim();
-
-    if (
-      text.length > 20 &&
-      text.length < 200000 &&
-      /^[\[{]/.test(text)
-    ) {
-      try {
-        walk(JSON.parse(text), output, depth + 1);
-      } catch {}
-    }
-
-    return;
-  }
-
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      walk(item, output, depth + 1);
-      if (output.length >= MAX_MEDIA) break;
-    }
-
-    return;
-  }
-
-  if (typeof value !== 'object') return;
-
-  if (Array.isArray(value.video_versions)) {
-    for (const item of value.video_versions) {
-      addMedia(output, 'video', item?.url);
-    }
-  }
-
-  if (value.video_url) {
-    addMedia(output, 'video', value.video_url);
-  }
-
-  if (value.contentUrl) {
-    addMedia(output, 'video', value.contentUrl);
-  }
-
-  if (Array.isArray(value.image_versions2?.candidates)) {
-    for (const item of value.image_versions2.candidates) {
-      addMedia(output, 'image', item?.url);
-    }
-  }
-
-  if (value.display_url) {
-    addMedia(output, 'image', value.display_url);
-  }
-
-  if (value.display_uri) {
-    addMedia(output, 'image', value.display_uri);
-  }
-
-  if (value.video_image?.uri) {
-    addMedia(output, 'image', value.video_image.uri);
-  }
-
-  if (Array.isArray(value.display_resources)) {
-    for (const item of value.display_resources) {
-      addMedia(output, 'image', item?.src || item?.url);
-    }
-  }
-
-  if (Array.isArray(value.video_resources)) {
-    for (const item of value.video_resources) {
-      addMedia(output, 'video', item?.src || item?.url);
-    }
-  }
-
-  if (Array.isArray(value.carousel_media)) {
-    for (const item of value.carousel_media) {
-      walk(item, output, depth + 1);
-    }
-  }
-
-  for (const [key, child] of Object.entries(value)) {
-    if ([
-      'video_versions',
-      'image_versions2',
-      'display_resources',
-      'video_resources',
-      'carousel_media'
-    ].includes(key)) {
-      continue;
-    }
-
-    walk(child, output, depth + 1);
-
-    if (output.length >= MAX_MEDIA) break;
-  }
-}
-
-function extractMeta(html, property) {
-  const escaped = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-  const patterns = [
-    new RegExp(
-      `<meta[^>]+property=["']${escaped}["'][^>]+content=["']([^"']+)["']`,
-      'i'
-    ),
-    new RegExp(
-      `<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${escaped}["']`,
-      'i'
-    )
-  ];
-
-  for (const pattern of patterns) {
-    const match = html.match(pattern);
-    if (match?.[1]) return match[1];
-  }
-
-  return null;
-}
-
-function extractFromHtml(html) {
-  const output = [];
-
-  const videoMeta =
-    extractMeta(html, 'og:video') ||
-    extractMeta(html, 'og:video:url') ||
-    extractMeta(html, 'og:video:secure_url');
-
-  const imageMeta = extractMeta(html, 'og:image');
-
-  if (videoMeta) addMedia(output, 'video', videoMeta);
-  if (imageMeta) addMedia(output, 'image', imageMeta);
-
-  const scripts = html.match(
-    /<script\b[^>]*>([\s\S]*?)<\/script>/gi
-  ) || [];
-
-  for (const script of scripts) {
-    const content = script
-      .replace(/^<script\b[^>]*>/i, '')
-      .replace(/<\/script>$/i, '')
-      .trim();
-
-    if (!content) continue;
-
-    try {
-      walk(JSON.parse(content), output);
-    } catch {
-      const markers = [
-        '"shortcode_media"',
-        '"xig_polaris_media"',
-        '"video_versions"',
-        '"image_versions2"',
-        '"__bbox"'
-      ];
-
-      for (const marker of markers) {
-        const position = content.indexOf(marker);
-        if (position === -1) continue;
-
-        const start = content.indexOf('{', position);
-        if (start === -1) continue;
-
-        let depth = 0;
-        let inString = false;
-        let escaped = false;
-
-        for (let i = start; i < content.length; i++) {
-          const char = content[i];
-
-          if (inString) {
-            if (escaped) {
-              escaped = false;
-            } else if (char === '\\') {
-              escaped = true;
-            } else if (char === '"') {
-              inString = false;
-            }
-
-            continue;
-          }
-
-          if (char === '"') {
-            inString = true;
-          } else if (char === '{') {
-            depth++;
-          } else if (char === '}') {
-            depth--;
-
-            if (depth === 0) {
-              try {
-                walk(
-                  JSON.parse(content.slice(start, i + 1)),
-                  output
-                );
-              } catch {}
-
-              break;
-            }
-          }
-        }
-      }
-    }
-
-    if (output.length >= MAX_MEDIA) break;
-  }
-
-  return output.slice(0, MAX_MEDIA);
-}
-
-function extractMedia(data, html = '') {
-  const output = [];
-
-  if (data) walk(data, output);
-
-  if (html) {
-    for (const item of extractFromHtml(html)) {
-      if (!output.some(existing => existing.url === item.url)) {
-        output.push(item);
-      }
-    }
-  }
-
-  return output.slice(0, MAX_MEDIA);
-}
-
-function diagnoseResponse(response, body, data) {
-  const raw = String(body || '');
-
-  let serialized = '';
-
-  try {
-    serialized = data ? JSON.stringify(data) : '';
-  } catch {}
-
-  const searchable = `${raw}\n${serialized}`;
-
-  const title =
-    raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
-      ?.replace(/\s+/g, ' ')
-      .slice(0, 120) || null;
-
-  return {
-    httpStatus: response.status,
-    contentType: response.headers.get('content-type'),
-    finalUrl: response.url,
-    bodyLength: raw.length,
-    pageTitle: title,
-
-    jsonKeys:
-      data && typeof data === 'object'
-        ? Object.keys(data).slice(0, 25)
-        : [],
-
-    jsonError: data?.error ?? null,
-    errorSummary: data?.errorSummary ?? null,
-    errorDescription: data?.errorDescription ?? null,
-
-    payloadKeys:
-      data?.payload && typeof data.payload === 'object'
-        ? Object.keys(data.payload).slice(0, 20)
-        : [],
-
-    markers: {
-      login: /login_required|accounts\/login|Log in to Instagram/i.test(searchable),
-      checkpoint: /checkpoint_required|challenge_required|\/challenge\//i.test(searchable),
-      private: /This account is private|account_is_private/i.test(searchable),
-      consent: /consent_required|cookie consent/i.test(searchable),
-      rateLimit: /rate.?limit|Please wait a few minutes|try again later/i.test(searchable),
-      mediaPayload: /video_versions|video_url|image_versions2|shortcode_media|xig_polaris_media/i.test(searchable)
-    }
-  };
-}
-
-function buildError(shortcode, errors) {
-  return {
-    status: false,
-    platform: 'instagram',
-    shortcode,
-    error: errors.join(' | ')
-  };
-}
-
-function buildSuccess(shortcode, media, source) {
-  return {
-    status: true,
-    platform: 'instagram',
-    shortcode,
-    extractionMethod: source,
-    total: media.length,
-    media
-  };
-}
-
-async function fetchWithTimeout(url) {
+async function fetchGraphQL(shortcode) {
   const controller = new AbortController();
 
   const timer = setTimeout(
@@ -443,75 +163,110 @@ async function fetchWithTimeout(url) {
     TIMEOUT
   );
 
+  const variables = {
+    shortcode,
+    fetch_tagged_user_count: null,
+    hoisted_comment_id: null,
+    hoisted_reply_id: null
+  };
+
+  const body = new URLSearchParams({
+    av: '0',
+    __d: 'www',
+    __user: '0',
+    __a: '1',
+    __req: 'b',
+    __comet_req: '7',
+    fb_api_caller_class: 'RelayModern',
+    fb_api_req_friendly_name: 'PolarisPostActionLoadPostQueryQuery',
+    variables: JSON.stringify(variables),
+    server_timestamps: 'true',
+    doc_id: DOC_ID
+  });
+
   try {
-    return await fetch(url, {
-      method: 'GET',
-      headers: {
-        ...HEADERS,
-        ...(process.env.IG_COOKIE
-          ? { Cookie: process.env.IG_COOKIE }
-          : {})
-      },
+    const response = await fetch(GRAPHQL_URL, {
+      method: 'POST',
+      headers: HEADERS,
+      body: body.toString(),
       redirect: 'follow',
       signal: controller.signal
     });
+
+    const raw = await response.text();
+
+    let data;
+
+    try {
+      data = parseResponse(raw);
+    } catch {
+      throw new Error(
+        `Instagram devolvió una respuesta que no es JSON (HTTP ${response.status}).`
+      );
+    }
+
+    if (!response.ok) {
+      throw new Error(`Instagram respondió HTTP ${response.status}.`);
+    }
+
+    if (data?.errors?.length) {
+      throw new Error(
+        data.errors[0]?.message || 'Error de GraphQL.'
+      );
+    }
+
+    if (data?.error) {
+      throw new Error(
+        data.errorDescription ||
+        data.errorSummary ||
+        `Error de Instagram: ${data.error}`
+      );
+    }
+
+    return data;
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function getCandidate(candidate, shortcode) {
-  const url = candidate.build(shortcode);
-
-  const response = await fetchWithTimeout(url);
-  const body = await response.text();
-
-  let data = null;
-
-  if (candidate.kind === 'json') {
-    try {
-      data = parseInstagramJson(body);
-    } catch {
-      return {
-        url,
-        response,
-        body,
-        data: null,
-        parseError: 'JSON inválido'
-      };
-    }
-  }
-
-  const media = extractMedia(
-    data,
-    candidate.kind === 'json' ? '' : body
-  );
-
+function successResult(shortcode, media, post) {
   return {
-    url,
-    response,
-    body,
-    data,
+    status: true,
+    platform: 'instagram',
+    shortcode,
+    id: post?.id || post?.pk || null,
+    type: post?.product_type || (
+      post?.is_video ? 'video' : 'post'
+    ),
+    caption:
+      post?.caption?.text ||
+      post?.edge_media_to_caption?.edges?.[0]?.node?.text ||
+      null,
+    username:
+      post?.owner?.username ||
+      post?.user?.username ||
+      null,
+    total: media.length,
     media
   };
 }
 
-async function safeReact(react, emoji) {
-  try {
-    if (typeof react === 'function') {
-      await react(emoji);
-    }
-  } catch {}
-}
-
 export default {
   name: ['test'],
-  description: 'Diagnóstico y extracción de medios públicos de Instagram.',
+  description: 'Obtiene los datos multimedia de Instagram mediante GraphQL.',
   category: 'owner',
   ownerOnly: true,
   groupOnly: false,
 
   async run({ args, reply, react }) {
+    const safeReact = async emoji => {
+      try {
+        if (typeof react === 'function') {
+          await react(emoji);
+        }
+      } catch {}
+    };
+
     try {
       const input = Array.isArray(args)
         ? args.join(' ').trim()
@@ -520,80 +275,64 @@ export default {
       const shortcode = extractShortcode(input);
 
       if (!shortcode) {
-        await safeReact(react, '❌');
+        await safeReact('❌');
 
         return reply(JSON.stringify({
           status: false,
           platform: 'instagram',
-          error: 'Enlace inválido. Envía un enlace de Instagram de tipo /reel/, /p/ o /tv/.'
+          error: 'Enlace inválido. Envía un enlace /p/, /reel/ o /tv/.'
         }, null, 2));
       }
 
-      await safeReact(react, '🔎');
+      await safeReact('🔎');
 
-      const errors = [];
+      const data = await fetchGraphQL(shortcode);
+      const post = findMedia(data);
 
-      for (const candidate of CANDIDATOS) {
-        try {
-          const result = await getCandidate(
-            candidate,
-            shortcode
-          );
+      if (!post) {
+        await safeReact('❌');
 
-          if (result.media?.length) {
-            await safeReact(react, '✅');
-
-            return reply(JSON.stringify(
-              buildSuccess(
-                shortcode,
-                result.media,
-                candidate.kind
-              ),
-              null,
-              2
-            ));
-          }
-
-          const diagnostic = diagnoseResponse(
-            result.response,
-            result.body,
-            result.data
-          );
-
-          const reason = result.parseError
-            ? result.parseError
-            : 'sin media';
-
-          errors.push(
-            `${result.url} → ${reason} → ${JSON.stringify(diagnostic)}`
-          );
-
-        } catch (error) {
-          errors.push(
-            `${candidate.build(shortcode)} → ${
-              error.name === 'AbortError'
-                ? 'timeout'
-                : error.message
-            }`
-          );
-        }
+        return reply(JSON.stringify({
+          status: false,
+          platform: 'instagram',
+          shortcode,
+          error: 'GraphQL respondió, pero no encontramos los datos de la publicación.',
+          responseKeys: Object.keys(data || {}),
+          dataKeys: Object.keys(data?.data || {})
+        }, null, 2));
       }
 
-      await safeReact(react, '❌');
+      const media = extractMedia(post);
+
+      if (!media.length) {
+        await safeReact('❌');
+
+        return reply(JSON.stringify({
+          status: false,
+          platform: 'instagram',
+          shortcode,
+          id: post.id || post.pk || null,
+          error: 'Se encontró la publicación, pero no sus URL multimedia.'
+        }, null, 2));
+      }
+
+      await safeReact('✅');
 
       return reply(JSON.stringify(
-        buildError(shortcode, errors),
+        successResult(shortcode, media, post),
         null,
         2
       ));
 
     } catch (error) {
-      await safeReact(react, '❌');
+      await safeReact('❌');
 
       return reply(JSON.stringify({
         status: false,
         platform: 'instagram',
-        error: error.message || 'Error inesperado.'
+        error: error.name === 'AbortError'
+          ? 'Tiempo de espera agotado.'
+          : error.message || 'Error inesperado.'
       }, null, 2));
     }
   }
