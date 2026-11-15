@@ -209,9 +209,9 @@ function buildErrorJSON(error) {
 }
 
 export default {
-  name: ['ig', 'instagram'],
+  name: ['test'],
   description: 'Extrae enlaces multimedia de Instagram.',
-  category: 'downloader',
+  category: 'owner',
   groupOnly: false,
   ownerOnly: true,
 
