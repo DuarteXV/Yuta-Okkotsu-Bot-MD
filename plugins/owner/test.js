@@ -1,210 +1,83 @@
 
 const BASE = 'https://www.instagram.com';
-const TIMEOUT = 30000;
+const TIMEOUT = 25000;
 const MAX_MEDIA = 20;
 
 const UA =
-  'Mozilla/5.0 (Linux; Android 11; moto g(9) play Build/RPXS31.Q2-58-17-7-3; wv) ' +
-  'AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/157.0.8103.40 Mobile Safari/537.36';
+  'Mozilla/5.0 (Linux; Android 11; moto g(9) play) ' +
+  'AppleWebKit/537.36 (KHTML, like Gecko) ' +
+  'Chrome/120.0.0.0 Mobile Safari/537.36';
 
-const COOKIE = process.env.IG_COOKIE || '';
-
-const SHORTCODE_RE =
-  /instagram\.com\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/i;
-
-const SCRIPT_RE = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
-const META_RE = /<meta\b[^>]*>/gi;
-const ATTR_RE = /([\w:.-]+)\s*=\s*"([^"]*)"/g;
-const UI_ASSET_RE = /\/rsrc\.php\//i;
+const HEADERS = {
+  'User-Agent': UA,
+  'Accept': 'text/html,application/xhtml+xml,application/json,*/*',
+  'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+  'Referer': `${BASE}/`,
+  'X-Requested-With': 'XMLHttpRequest'
+};
 
 const CANDIDATOS = [
-  { kind: 'embed', build: sc => `${BASE}/p/${sc}/embed/captioned/` },
-  { kind: 'embed', build: sc => `${BASE}/reel/${sc}/embed/captioned/` },
-  { kind: 'embed', build: sc => `${BASE}/p/${sc}/embed/` },
-  { kind: 'html', build: sc => `${BASE}/reel/${sc}/` },
-  { kind: 'html', build: sc => `${BASE}/p/${sc}/` },
-  { kind: 'json', build: sc => `${BASE}/p/${sc}/?__a=1&__d=disco` }
+  {
+    kind: 'embed',
+    build: sc => `${BASE}/p/${sc}/embed/captioned/`
+  },
+  {
+    kind: 'embed',
+    build: sc => `${BASE}/reel/${sc}/embed/captioned/`
+  },
+  {
+    kind: 'embed',
+    build: sc => `${BASE}/p/${sc}/embed/`
+  },
+  {
+    kind: 'html',
+    build: sc => `${BASE}/reel/${sc}/`
+  },
+  {
+    kind: 'html',
+    build: sc => `${BASE}/p/${sc}/`
+  },
+  {
+    kind: 'json',
+    build: sc => `${BASE}/p/${sc}/?__a=1&__d=disco`
+  }
 ];
-
-function decodeEntities(value) {
-  const named = {
-    amp: '&',
-    lt: '<',
-    gt: '>',
-    quot: '"',
-    apos: "'",
-    nbsp: ' '
-  };
-
-  return String(value).replace(
-    /&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g,
-    (match, key) => {
-      const name = key.toLowerCase();
-
-      if (named[name] !== undefined) return named[name];
-
-      if (name[0] === '#') {
-        const number = name[1] === 'x'
-          ? parseInt(name.slice(2), 16)
-          : parseInt(name.slice(1), 10);
-
-        if (Number.isFinite(number) && number >= 0 && number <= 0x10ffff) {
-          try {
-            return String.fromCodePoint(number);
-          } catch {}
-        }
-      }
-
-      return match;
-    }
-  );
-}
 
 function cleanUrl(value) {
   if (typeof value !== 'string') return null;
 
-  const decoded = decodeEntities(value)
-    .replace(/\\u0026/gi, '&')
-    .replace(/\\u002f/gi, '/')
+  let url = value
+    .replace(/&amp;/g, '&')
+    .replace(/\\u0026/g, '&')
     .replace(/\\\//g, '/')
     .trim();
 
+  if (!/^https?:\/\//i.test(url)) return null;
+
   try {
-    const url = new URL(decoded);
+    const parsed = new URL(url);
 
-    if (url.protocol !== 'https:') return null;
+    const host = parsed.hostname.toLowerCase();
 
-    const host = url.hostname.toLowerCase();
+    const allowed =
+      host.endsWith('cdninstagram.com') ||
+      host.endsWith('fbcdn.net') ||
+      host === 'instagram.com' ||
+      host.endsWith('.instagram.com');
+
+    if (!allowed) return null;
 
     if (
-      !host.endsWith('cdninstagram.com') &&
-      !host.endsWith('fbcdn.net')
-    ) return null;
+      parsed.pathname.includes('/rsrc.php/') ||
+      parsed.pathname.includes('/static/')
+    ) {
+      return null;
+    }
 
-    if (UI_ASSET_RE.test(url.pathname)) return null;
-
-    url.hash = '';
-
-    return url.toString();
+    return parsed.href;
   } catch {
     return null;
   }
-}
-
-function* walk(node) {
-  const stack = [node];
-
-  while (stack.length) {
-    const current = stack.pop();
-
-    if (Array.isArray(current)) {
-      for (const value of current) stack.push(value);
-      continue;
-    }
-
-    if (current && typeof current === 'object') {
-      yield current;
-
-      for (const value of Object.values(current)) {
-        stack.push(value);
-      }
-
-      continue;
-    }
-
-    if (
-      typeof current === 'string' &&
-      current.length > 1 &&
-      current.length < 8e6 &&
-      (current[0] === '{' || current[0] === '[')
-    ) {
-      try {
-        stack.push(JSON.parse(current));
-      } catch {}
-    }
-  }
-}
-
-function area(item) {
-  return (item?.width || 0) * (item?.height || 0);
-}
-
-function biggest(list) {
-  const items = (list || []).filter(
-    item => item && typeof item.url === 'string' && item.url
-  );
-
-  if (!items.length) return null;
-
-  return items.reduce((a, b) => (
-    area(b) > area(a) ? b : a
-  ));
-}
-
-function pickVideoVersion(list) {
-  const items = (list || []).filter(
-    item => item && typeof item.url === 'string' && item.url
-  );
-
-  if (!items.length) return null;
-
-  const rank = item => {
-    const type = String(
-      item.type == null ? '' : item.type
-    ).toUpperCase();
-
-    if (type.includes('640_HIGH')) return 3;
-    if (type.includes('480_HIGH')) return 2;
-    if (type.includes('HIGH')) return 1;
-
-    return 0;
-  };
-
-  return items.reduce((a, b) => {
-    const difference = rank(b) - rank(a);
-
-    if (difference !== 0) {
-      return difference > 0 ? b : a;
-    }
-
-    return area(b) > area(a) ? b : a;
-  });
-}
-
-function resolveShortcode(input) {
-  const value = String(input || '').trim();
-  const match = SHORTCODE_RE.exec(value);
-
-  if (match) return match[1];
-
-  if (/^[A-Za-z0-9_-]{5,}$/.test(value)) {
-    return value;
-  }
-
-  throw new Error(
-    'No encuentro un shortcode válido en el enlace.'
-  );
-}
-
-async function fetchResp(url, kind) {
-  const headers = {
-    'User-Agent': UA,
-    'Accept': kind === 'json'
-      ? 'application/json, */*;q=0.1'
-      : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Language': 'es-CO,es;q=0.9,en;q=0.8',
-    'Referer': BASE + '/'
-  };
-
-  if (COOKIE) {
-    headers.Cookie = COOKIE;
-  }
-
-  return fetch(url, {
-    headers,
-    redirect: 'follow',
-    signal: AbortSignal.timeout(TIMEOUT)
-  });
 }
 
 function parseInstagramJson(raw) {
@@ -216,541 +89,458 @@ function parseInstagramJson(raw) {
   return JSON.parse(cleaned);
 }
 
-function extractJsonAfter(text, marker) {
-  const idx = text.indexOf(marker);
+function extractShortcode(input) {
+  const text = String(input || '').trim();
 
-  if (idx === -1) return null;
-
-  const tail = text.slice(
-    idx + marker.length,
-    idx + marker.length + 20
+  const match = text.match(
+    /(?:instagram\.com\/(?:reel|p|tv)\/|^)([A-Za-z0-9_-]{5,})/
   );
 
-  if (/^\s*=\s*function/.test(tail)) {
-    return null;
-  }
-
-  const start = text.indexOf('{', idx);
-
-  if (start === -1) return null;
-
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-
-  for (let i = start; i < text.length; i++) {
-    const c = text[i];
-
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-
-      if (c === '\\') {
-        escaped = true;
-        continue;
-      }
-
-      if (c === '"') {
-        inString = false;
-      }
-
-      continue;
-    }
-
-    if (c === '"') {
-      inString = true;
-      continue;
-    }
-
-    if (c === '{') {
-      depth++;
-    } else if (c === '}') {
-      depth--;
-
-      if (depth === 0) {
-        try {
-          return JSON.parse(text.slice(start, i + 1));
-        } catch {
-          return null;
-        }
-      }
-    }
-  }
-
-  return null;
+  return match?.[1] || null;
 }
 
-function extractEmbedJson(html) {
-  let data = extractJsonAfter(
-    html,
-    '__additionalDataLoaded'
-  );
+function addMedia(output, type, value) {
+  const url = cleanUrl(value);
 
-  if (data) return data;
+  if (!url) return;
 
-  data = extractJsonAfter(
-    html,
-    '"shortcode_media"'
-  );
+  if (output.some(item => item.url === url)) return;
 
-  if (data) return data;
-
-  data = extractJsonAfter(
-    html,
-    'contextJSON'
-  );
-
-  if (data) return data;
-
-  const match = /<script[^>]*type="application\/json"[^>]*>([\s\S]*?)<\/script>/i.exec(html);
-
-  if (match) {
-    try {
-      return JSON.parse(match[1]);
-    } catch {}
-  }
-
-  return null;
+  output.push({
+    type,
+    url
+  });
 }
 
-function parseMetas(html) {
-  const output = {};
-  const tags = html.match(META_RE) || [];
+function walk(value, output, depth = 0) {
+  if (!value || depth > 18 || output.length >= MAX_MEDIA) return;
 
-  for (const tag of tags) {
-    const attrs = {};
-
-    ATTR_RE.lastIndex = 0;
-
-    let match;
-
-    while ((match = ATTR_RE.exec(tag))) {
-      attrs[match[1].toLowerCase()] = decodeEntities(match[2]);
-    }
-
-    const key = (
-      attrs.property ||
-      attrs.name ||
-      ''
-    ).toLowerCase();
-
+  if (typeof value === 'string') {
     if (
-      key &&
-      attrs.content &&
-      output[key] === undefined
+      value.length > 20 &&
+      value.length < 200000 &&
+      /^[\[{]/.test(value.trim())
     ) {
-      output[key] = attrs.content;
+      try {
+        walk(JSON.parse(value), output, depth + 1);
+      } catch {}
+    }
+
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      walk(item, output, depth + 1);
+      if (output.length >= MAX_MEDIA) break;
+    }
+
+    return;
+  }
+
+  if (typeof value !== 'object') return;
+
+  if (Array.isArray(value.video_versions)) {
+    for (const item of value.video_versions) {
+      addMedia(output, 'video', item?.url);
     }
   }
 
-  return output;
-}
-
-function collect(obj, meta, add) {
-  if (
-    typeof obj.__isXIGPolarisMedia === 'string'
-  ) {
-    meta.typename = obj.__isXIGPolarisMedia;
+  if (value.video_url) {
+    addMedia(output, 'video', value.video_url);
   }
 
-  if (
-    typeof obj.__typename === 'string' &&
-    obj.__typename.includes('XIGPolaris')
-  ) {
-    meta.typename = obj.__typename;
+  if (value.contentUrl) {
+    addMedia(output, 'video', value.contentUrl);
   }
 
-  if (
-    typeof obj.code === 'string' &&
-    /^[A-Za-z0-9_-]{5,}$/.test(obj.code)
-  ) {
-    meta.code = obj.code;
-  }
-
-  if (
-    Array.isArray(obj.video_versions) &&
-    obj.video_versions.length
-  ) {
-    const best = pickVideoVersion(obj.video_versions);
-
-    if (best) {
-      add('video', best.url, 'video_versions', {
-        width: best.width,
-        height: best.height,
-        vtype: best.type
-      });
+  if (Array.isArray(value.image_versions2?.candidates)) {
+    for (const item of value.image_versions2.candidates) {
+      addMedia(output, 'image', item?.url);
     }
   }
 
-  if (typeof obj.video_url === 'string') {
-    add('video', obj.video_url, 'video_url');
+  if (value.display_url) {
+    addMedia(output, 'image', value.display_url);
   }
 
-  if (
-    obj.image_versions2 &&
-    Array.isArray(obj.image_versions2.candidates)
-  ) {
-    const best = biggest(obj.image_versions2.candidates);
+  if (value.display_uri) {
+    addMedia(output, 'image', value.display_uri);
+  }
 
-    if (best) {
-      add('image', best.url, 'image_versions2', {
-        width: best.width,
-        height: best.height
-      });
+  if (value.video_image?.uri) {
+    addMedia(output, 'image', value.video_image.uri);
+  }
+
+  if (Array.isArray(value.display_resources)) {
+    for (const item of value.display_resources) {
+      addMedia(output, 'image', item?.src || item?.url);
     }
   }
 
-  if (typeof obj.display_url === 'string') {
-    add('image', obj.display_url, 'display_url');
-  }
-
-  if (typeof obj.display_uri === 'string') {
-    add('image', obj.display_uri, 'display_uri');
-  }
-
-  if (
-    obj.video_image &&
-    typeof obj.video_image.uri === 'string'
-  ) {
-    add('image', obj.video_image.uri, 'video_image.uri', {
-      width: obj.video_image.width,
-      height: obj.video_image.height
-    });
-  }
-
-  if (
-    Array.isArray(obj.display_resources) &&
-    obj.display_resources.length
-  ) {
-    const best = obj.display_resources
-      .filter(r => r && typeof r.src === 'string')
-      .reduce((a, b) => {
-        const areaA =
-          (a.config_width || 0) *
-          (a.config_height || 0);
-
-        const areaB =
-          (b.config_width || 0) *
-          (b.config_height || 0);
-
-        return areaB > areaA ? b : a;
-      }, {});
-
-    if (best.src) {
-      add('image', best.src, 'display_resources', {
-        width: best.config_width,
-        height: best.config_height
-      });
+  if (Array.isArray(value.video_resources)) {
+    for (const item of value.video_resources) {
+      addMedia(output, 'video', item?.src || item?.url);
     }
   }
 
-  if (
-    Array.isArray(obj.video_resources) &&
-    obj.video_resources.length
-  ) {
-    const best = obj.video_resources
-      .filter(r => r && typeof r.src === 'string')
-      .reduce((a, b) => {
-        const areaA =
-          (a.config_width || 0) *
-          (a.config_height || 0);
-
-        const areaB =
-          (b.config_width || 0) *
-          (b.config_height || 0);
-
-        return areaB > areaA ? b : a;
-      }, {});
-
-    if (best.src) {
-      add('video', best.src, 'video_resources', {
-        width: best.config_width,
-        height: best.config_height
-      });
+  if (Array.isArray(value.carousel_media)) {
+    for (const item of value.carousel_media) {
+      walk(item, output, depth + 1);
     }
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    if (
+      key === 'video_versions' ||
+      key === 'image_versions2' ||
+      key === 'display_resources' ||
+      key === 'video_resources' ||
+      key === 'carousel_media'
+    ) {
+      continue;
+    }
+
+    walk(child, output, depth + 1);
+
+    if (output.length >= MAX_MEDIA) break;
   }
 }
 
-function extractMedia(html, data) {
-  const media = [];
-  const seen = new Set();
-  const meta = {};
+function extractMeta(html, property) {
+  const escaped = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-  const add = (type, rawUrl, source, extra) => {
-    const url = cleanUrl(rawUrl);
+  const patterns = [
+    new RegExp(
+      `<meta[^>]+property=["']${escaped}["'][^>]+content=["']([^"']+)["']`,
+      'i'
+    ),
+    new RegExp(
+      `<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${escaped}["']`,
+      'i'
+    )
+  ];
 
-    if (!url || seen.has(url)) return;
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (match?.[1]) return match[1];
+  }
 
-    seen.add(url);
+  return null;
+}
 
-    const item = {
-      type,
-      url,
-      source
-    };
+function extractFromHtml(html) {
+  const output = [];
 
-    if (extra) {
-      for (const key of Object.keys(extra)) {
-        if (
-          extra[key] !== undefined &&
-          extra[key] !== null
-        ) {
-          item[key] = extra[key];
+  const videoMeta =
+    extractMeta(html, 'og:video') ||
+    extractMeta(html, 'og:video:url') ||
+    extractMeta(html, 'og:video:secure_url');
+
+  const imageMeta = extractMeta(html, 'og:image');
+
+  if (videoMeta) addMedia(output, 'video', videoMeta);
+  if (imageMeta) addMedia(output, 'image', imageMeta);
+
+  const scripts = html.match(
+    /<script\b[^>]*>([\s\S]*?)<\/script>/gi
+  ) || [];
+
+  for (const script of scripts) {
+    const content = script
+      .replace(/^<script\b[^>]*>/i, '')
+      .replace(/<\/script>$/i, '')
+      .trim();
+
+    if (!content) continue;
+
+    try {
+      walk(JSON.parse(content), output);
+    } catch {
+      const markers = [
+        '"shortcode_media"',
+        '"xig_polaris_media"',
+        '"video_versions"',
+        '"image_versions2"',
+        '"__bbox"'
+      ];
+
+      for (const marker of markers) {
+        const position = content.indexOf(marker);
+        if (position === -1) continue;
+
+        const start = content.indexOf('{', position);
+
+        if (start === -1) continue;
+
+        let depth = 0;
+        let inString = false;
+        let escaped = false;
+
+        for (let i = start; i < content.length; i++) {
+          const char = content[i];
+
+          if (inString) {
+            if (escaped) {
+              escaped = false;
+            } else if (char === '\\') {
+              escaped = true;
+            } else if (char === '"') {
+              inString = false;
+            }
+
+            continue;
+          }
+
+          if (char === '"') {
+            inString = true;
+          } else if (char === '{') {
+            depth++;
+          } else if (char === '}') {
+            depth--;
+
+            if (depth === 0) {
+              try {
+                walk(JSON.parse(content.slice(start, i + 1)), output);
+              } catch {}
+
+              break;
+            }
+          }
         }
       }
     }
 
-    media.push(item);
-  };
-
-  if (html) {
-    const metas = parseMetas(html);
-
-    add(
-      'image',
-      metas['og:image'],
-      'meta:og:image'
-    );
+    if (output.length >= MAX_MEDIA) break;
   }
 
-  if (html) {
-    SCRIPT_RE.lastIndex = 0;
-
-    let match;
-
-    while ((match = SCRIPT_RE.exec(html))) {
-      const attrs = match[1];
-      const body = match[2];
-
-      const isJson =
-        /type\s*=\s*"application\/json"/i.test(attrs);
-
-      if (
-        !isJson &&
-        !body.includes('__bbox') &&
-        !body.includes('xig_polaris_media')
-      ) {
-        continue;
-      }
-
-      let parsed;
-
-      try {
-        parsed = JSON.parse(body);
-      } catch {
-        continue;
-      }
-
-      for (const item of walk(parsed)) {
-        collect(item, meta, add);
-      }
-    }
-  }
-
-  if (data) {
-    for (const item of walk(data)) {
-      collect(item, meta, add);
-    }
-  }
-
-  media.sort((a, b) => {
-    if (a.type !== b.type) {
-      return a.type === 'video' ? -1 : 1;
-    }
-
-    return area(b) - area(a);
-  });
-
-  const limited = media.slice(0, MAX_MEDIA);
-
-  limited.forEach((item, index) => {
-    item.index = index + 1;
-  });
-
-  return {
-    media: limited,
-    meta
-  };
+  return output.slice(0, MAX_MEDIA);
 }
 
-function diagnoseResponse(response, html, data) {
-  const raw = html || '';
+function extractMedia(data, html = '') {
+  const output = [];
 
-  const markers = {
-    login: /login_required|accounts\/login|Log in to Instagram/i.test(raw),
-    checkpoint: /checkpoint_required|challenge_required|\/challenge\//i.test(raw),
-    private: /This account is private|account_is_private/i.test(raw),
-    consent: /consent_required|cookie consent/i.test(raw),
-    rateLimit: /rate.?limit|Please wait a few minutes/i.test(raw),
-    mediaPayload: /video_versions|video_url|image_versions2|shortcode_media|xig_polaris_media/i.test(raw)
-  };
+  if (data) walk(data, output);
+
+  if (html) {
+    for (const item of extractFromHtml(html)) {
+      if (!output.some(existing => existing.url === item.url)) {
+        output.push(item);
+      }
+    }
+  }
+
+  return output.slice(0, MAX_MEDIA);
+}
+
+function diagnoseResponse(response, body, data) {
+  const raw = String(body || '');
+
+  let serialized = '';
+
+  try {
+    serialized = data ? JSON.stringify(data) : '';
+  } catch {}
+
+  const searchable = `${raw}\n${serialized}`;
+
+  const title =
+    raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
+      ?.replace(/\s+/g, ' ')
+      .slice(0, 120) || null;
+
+  const error = data?.error ?? null;
+  const errorSummary = data?.errorSummary ?? null;
+  const errorDescription = data?.errorDescription ?? null;
 
   return {
     httpStatus: response.status,
     contentType: response.headers.get('content-type'),
     finalUrl: response.url,
     bodyLength: raw.length,
-    pageTitle: raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.slice(0, 120) || null,
-    jsonKeys: data && typeof data === 'object'
-      ? Object.keys(data).slice(0, 25)
-      : [],
-    markers
+    pageTitle: title,
+
+    jsonKeys:
+      data && typeof data === 'object'
+        ? Object.keys(data).slice(0, 25)
+        : [],
+
+    jsonError: error,
+    errorSummary,
+    errorDescription,
+
+    payloadKeys:
+      data?.payload && typeof data.payload === 'object'
+        ? Object.keys(data.payload).slice(0, 20)
+        : [],
+
+    markers: {
+      login: /login_required|accounts\/login|Log in to Instagram/i.test(searchable),
+      checkpoint: /checkpoint_required|challenge_required|\/challenge\//i.test(searchable),
+      private: /This account is private|account_is_private/i.test(searchable),
+      consent: /consent_required|cookie consent/i.test(searchable),
+      rateLimit: /rate.?limit|Please wait a few minutes|try again later/i.test(searchable),
+      mediaPayload: /video_versions|video_url|image_versions2|shortcode_media|xig_polaris_media/i.test(searchable)
+    }
   };
 }
 
-async function igMedia(input) {
-  const shortcode = resolveShortcode(input);
-  const errors = [];
-
-  for (const candidato of CANDIDATOS) {
-    const url = candidato.build(shortcode);
-
-    try {
-      const response = await fetchResp(
-        url,
-        candidato.kind
-      );
-
-      if (!response.ok) {
-        errors.push(
-          `${url} → HTTP ${response.status}`
-        );
-        continue;
-      }
-
-      const contentType = (
-        response.headers.get('content-type') || ''
-      ).toLowerCase();
-
-      let html = null;
-      let data = null;
-
-      if (
-        candidato.kind === 'json' ||
-        contentType.includes('application/json')
-      ) {
-        try {
-          const raw = await response.text();
-          data = parseInstagramJson(raw);
-        } catch (error) {
-          errors.push(
-            `${url} → JSON inválido: ${error.message}`
-          );
-          continue;
-        }
-      } else {
-        html = await response.text();
-
-        if (candidato.kind === 'embed') {
-          data = extractEmbedJson(html);
-        }
-      }
-
-      const { media, meta } = extractMedia(html, data);
-
-      if (!media.length) {
-        const diagnostic = diagnoseResponse(
-          response,
-          html,
-          data
-        );
-
-        errors.push(
-          `${url} → sin media → ${JSON.stringify(diagnostic)}`
-        );
-
-        continue;
-      }
-
-      const notes = [];
-
-      if (!media.some(item => item.type === 'video')) {
-        notes.push(
-          'No se encontró una URL de vídeo en el contenido recibido; solo se obtuvo imagen o portada.'
-        );
-      }
-
-      if (
-        meta.typename &&
-        /Carousel/i.test(meta.typename)
-      ) {
-        notes.push(
-          'Es un carrusel: cada slide puede contener su propia foto o vídeo.'
-        );
-      }
-
-      return {
-        status: true,
-        platform: 'instagram',
-        shortcode,
-        url,
-        source: candidato.kind,
-        typename: meta.typename || null,
-        total: media.length,
-        media,
-        notes,
-        extractionMethod: `relay-preloader+${candidato.kind}`
-      };
-    } catch (error) {
-      errors.push(
-        `${url} → ${error.message || String(error)}`
-      );
-    }
-  }
-
+function buildError(shortcode, errors) {
   return {
     status: false,
     platform: 'instagram',
     shortcode,
-    error: errors.join(' | ') ||
-      'No se encontró contenido multimedia.'
+    error: errors.join(' | ')
+  };
+}
+
+function buildSuccess(shortcode, media, source) {
+  return {
+    status: true,
+    platform: 'instagram',
+    shortcode,
+    extractionMethod: source,
+    total: media.length,
+    media
+  };
+}
+
+async function fetchWithTimeout(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT);
+
+  try {
+    return await fetch(url, {
+      method: 'GET',
+      headers: {
+        ...HEADERS,
+        ...(process.env.IG_COOKIE
+          ? { Cookie: process.env.IG_COOKIE }
+          : {})
+      },
+      redirect: 'follow',
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function getCandidate(candidate, shortcode) {
+  const url = candidate.build(shortcode);
+  const response = await fetchWithTimeout(url);
+  const body = await response.text();
+
+  let data = null;
+
+  if (candidate.kind === 'json') {
+    try {
+      data = parseInstagramJson(body);
+    } catch {
+      return {
+        url,
+        response,
+        body,
+        data: null,
+        parseError: 'JSON inválido'
+      };
+    }
+  }
+
+  const media = extractMedia(data, candidate.kind === 'json' ? '' : body);
+
+  return {
+    url,
+    response,
+    body,
+    data,
+    media
   };
 }
 
 export default {
   name: ['test'],
-  description: 'Extrae vídeos e imágenes de Instagram en formato JSON.',
+  description: 'Diagnóstico y extracción de medios públicos de Instagram.',
   category: 'owner',
-  groupOnly: false,
   ownerOnly: true,
+  groupOnly: false,
 
   async run({ args, reply, react }) {
     try {
-      const input = args?.join(' ')?.trim();
+      const input = Array.isArray(args)
+        ? args.join(' ').trim()
+        : String(args || '').trim();
 
-      if (!input) {
-        return reply('Pasa un enlace de Instagram.');
+      const shortcode = extractShortcode(input);
+
+      if (!shortcode) {
+        return reply(JSON.stringify({
+          status: false,
+          platform: 'instagram',
+          error: 'Envía un enlace válido de Instagram.'
+        }, null, 2));
       }
 
-      if (react) {
-        await react('⏳');
+      await react?.('🔎');
+
+      const errors = [];
+
+      for (const candidate of CANDIDATOS) {
+        try {
+          const result = await getCandidate(candidate, shortcode);
+
+          if (result.media?.length) {
+            await react?.('✅');
+
+            return reply(JSON.stringify(
+              buildSuccess(
+                shortcode,
+                result.media,
+                candidate.kind
+              ),
+              null,
+              2
+            ));
+          }
+
+          const diagnostic = diagnoseResponse(
+            result.response,
+            result.body,
+            result.data
+          );
+
+          const reason = result.parseError
+            ? result.parseError
+            : 'sin media';
+
+          errors.push(
+            `${result.url} → ${reason} → ${JSON.stringify(diagnostic)}`
+          );
+        } catch (error) {
+          errors.push(
+            `${candidate.build(shortcode)} → ${error.name === 'AbortError'
+              ? 'timeout'
+              : error.message}`
+          );
+        }
       }
 
-      const result = await igMedia(input);
+      await react?.('❌');
 
-      await reply(
-        JSON.stringify(result, null, 2)
-      );
+      return reply(JSON.stringify(
+        buildError(shortcode, errors),
+        null,
+        2
+      ));
 
-      if (react) {
-        await react(result.status ? '✅' : '⚠️');
-      }
     } catch (error) {
-      const result = {
+      await react?.('❌').catch?.(() => {});
+
+      return reply(JSON.stringify({
         status: false,
         platform: 'instagram',
-        error: error.message || 'Error desconocido'
-      };
-
-      await reply(
-        JSON.stringify(result, null, 2)
-      );
-
-      if (react) {
-        await react('❌').catch(() => {});
-      }
+        error: error.message || 'Error inesperado.'
+      }, null, 2));
     }
   }
 };
