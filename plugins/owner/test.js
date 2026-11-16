@@ -1,7 +1,9 @@
 
-const IG = 'https://www.instagram.com';
+const SAVEFROM = 'https://es.savefrom.net';
+const WORKER = 'https://worker.savefrom.net/savefrom.php';
+
 const TIMEOUT = 30000;
-const MAX_VIDEOS = 20;
+const MAX_PREVIEW = 1200;
 
 const UA =
   'Mozilla/5.0 (Linux; Android 11; moto g(9) play Build/RPXS31.Q2-58-17-7-3; wv) ' +
@@ -9,20 +11,11 @@ const UA =
 
 const HEADERS = {
   'User-Agent': UA,
-  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
   'Accept-Language': 'es-CO,es;q=0.9',
 };
 
-const RE_URL = /instagram\.com\/(p|reel|reels|tv)\/([A-Za-z0-9_-]+)/i;
-
-const RE_VERSIONS =
-  /"video_versions"\s*:\s*(\[.*?\])\s*,\s*"is_dash_eligible"/gs;
-
-const RE_DASH =
-  /"video_dash_manifest"\s*:\s*"((?:[^"\\]|\\.)*)"/s;
-
-const RE_VIDEO_URL =
-  /"video_url"\s*:\s*"((?:[^"\\]|\\.)*)"/s;
+const RE_URL =
+  /instagram\.com\/(p|reel|reels|tv)\/([A-Za-z0-9_-]+)/i;
 
 function obtenerEntrada(args) {
   return String(args?.join(' ') || '').trim();
@@ -34,13 +27,12 @@ function extraerShortcode(entrada) {
   const match = entrada.match(RE_URL);
 
   if (match) {
+    const ruta = match[1].toLowerCase();
+
     return {
       shortcode: match[2],
-      tipoRuta: match[1].toLowerCase() === 'p'
-        ? 'p'
-        : match[1].toLowerCase() === 'tv'
-          ? 'tv'
-          : 'reel',
+      tipoRuta: ruta === 'p' ? 'p' : ruta === 'tv' ? 'tv' : 'reel',
+      url: `https://www.instagram.com/${ruta}/${match[2]}/`,
     };
   }
 
@@ -48,150 +40,156 @@ function extraerShortcode(entrada) {
     return {
       shortcode: entrada,
       tipoRuta: 'reel',
+      url: `https://www.instagram.com/reel/${entrada}/`,
     };
   }
 
   return null;
 }
 
-async function obtenerHTML(shortcode, tipoRuta) {
-  const url = `${IG}/${tipoRuta}/${shortcode}/`;
+function extraerCookies(headers) {
+  const raw = headers.get('set-cookie');
 
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: HEADERS,
-    redirect: 'follow',
-    signal: AbortSignal.timeout(TIMEOUT),
-  });
+  if (!raw) return '';
 
-  const html = await response.text();
-
-  return {
-    url,
-    status: response.status,
-    html,
-  };
+  return raw
+    .split(/,(?=[^;,]+=)/)
+    .map(cookie => cookie.split(';')[0])
+    .filter(Boolean)
+    .join('; ');
 }
 
-function decodificarString(valor) {
-  try {
-    return JSON.parse(`"${valor}"`);
-  } catch {
-    return null;
+function extraerCampos(html) {
+  const campos = {};
+
+  const regex =
+    /<input\b[^>]*name=["']([^"']+)["'][^>]*value=["']([^"']*)["'][^>]*>/gi;
+
+  for (const match of html.matchAll(regex)) {
+    campos[match[1]] = match[2];
   }
+
+  return campos;
 }
 
-function limpiarURL(url) {
-  if (typeof url !== 'string') return null;
+function extraerEnlaces(texto) {
+  const encontrados = new Set();
 
-  try {
-    const parsed = new URL(
-      url.replace(/&amp;/g, '&')
-    );
+  const regex =
+    /https?:\\?\/\\?\/[^"'\\\s<>]+/gi;
 
-    const host = parsed.hostname.toLowerCase();
+  for (const match of texto.matchAll(regex)) {
+    let url = match[0]
+      .replace(/\\u0026/g, '&')
+      .replace(/\\\//g, '/')
+      .replace(/&amp;/g, '&')
+      .replace(/\\x26/g, '&')
+      .replace(/[\\]+$/g, '')
+      .replace(/[),;]+$/g, '');
 
-    const permitido =
-      host === 'cdninstagram.com' ||
-      host.endsWith('.cdninstagram.com') ||
-      host === 'fbcdn.net' ||
-      host.endsWith('.fbcdn.net');
-
-    if (!permitido) return null;
-
-    return parsed.href;
-  } catch {
-    return null;
-  }
-}
-
-function extraerVersiones(html) {
-  let mejores = [];
-
-  RE_VERSIONS.lastIndex = 0;
-
-  for (const match of html.matchAll(RE_VERSIONS)) {
     try {
-      const versiones = JSON.parse(match[1]);
+      const parsed = new URL(url);
 
       if (
-        Array.isArray(versiones) &&
-        versiones.length > mejores.length
+        parsed.hostname === 'media.sf-converter.com' &&
+        parsed.pathname === '/get'
       ) {
-        mejores = versiones;
+        encontrados.add(parsed.href);
       }
     } catch {}
   }
 
-  return mejores
-    .map(video => ({
-      tipo: video.type ?? null,
-      ancho: video.width ?? null,
-      alto: video.height ?? null,
-      url: limpiarURL(video.url),
-    }))
-    .filter(video => video.url)
-    .slice(0, MAX_VIDEOS);
+  return [...encontrados];
 }
 
-function extraerDASH(html) {
-  const match = html.match(RE_DASH);
+async function obtenerPagina(cookieJar) {
+  const response = await fetch(
+    `${SAVEFROM}/25-instagram-reels-download-2cR.html`,
+    {
+      headers: {
+        ...HEADERS,
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(TIMEOUT),
+    }
+  );
 
-  if (!match) return null;
+  const html = await response.text();
 
-  return decodificarString(match[1]);
-}
+  const cookies = extraerCookies(response.headers);
 
-function extraerVideoURL(html) {
-  const match = html.match(RE_VIDEO_URL);
-
-  if (!match) return null;
-
-  return limpiarURL(decodificarString(match[1]));
-}
-
-function extraerMedios(html) {
-  const versiones = extraerVersiones(html);
-
-  const dash = extraerDASH(html);
-
-  if (versiones.length) {
-    return {
-      tipo: 'video',
-      medios: versiones,
-      dash_manifest: dash
-        ? dash.slice(0, 200)
-        : null,
-    };
+  if (cookies) {
+    cookieJar.push(cookies);
   }
 
-  const videoURL = extraerVideoURL(html);
-
-  if (videoURL) {
-    return {
-      tipo: 'video',
-      medios: [{
-        tipo: null,
-        ancho: null,
-        alto: null,
-        url: videoURL,
-      }],
-      dash_manifest: dash
-        ? dash.slice(0, 200)
-        : null,
-    };
+  if (!response.ok) {
+    throw new Error(`SaveFrom respondió HTTP ${response.status} al abrir la página.`);
   }
 
   return {
-    tipo: null,
-    medios: [],
-    dash_manifest: null,
+    html,
+    cookies: cookieJar.join('; '),
+    status: response.status,
+  };
+}
+
+async function consultarSaveFrom(url) {
+  const cookieJar = [];
+
+  const pagina = await obtenerPagina(cookieJar);
+  const campos = extraerCampos(pagina.html);
+
+  const ts = Date.now();
+
+  const body = new URLSearchParams({
+    ...campos,
+    sf_url: url,
+    sf_submit: '',
+    new: '2',
+    lang: 'es',
+    app: '',
+    country: 'co',
+    os: 'Android',
+    browser: 'Chrome WebView',
+    channel: 'article',
+    'sf-nomad': '1',
+    url,
+    ts: String(ts),
+  });
+
+  const response = await fetch(WORKER, {
+    method: 'POST',
+    headers: {
+      ...HEADERS,
+      Accept: 'application/json, text/plain, */*',
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Origin: SAVEFROM,
+      Referer: `${SAVEFROM}/25-instagram-reels-download-2cR.html`,
+      Cookie: pagina.cookies,
+    },
+    body,
+    redirect: 'follow',
+    signal: AbortSignal.timeout(TIMEOUT),
+  });
+
+  const texto = await response.text();
+
+  const enlaces = extraerEnlaces(texto);
+
+  return {
+    status: response.status,
+    contentType: response.headers.get('content-type'),
+    length: texto.length,
+    isJavaScript: texto.trim().startsWith('/*js-response*/'),
+    enlaces,
+    preview: texto.slice(0, MAX_PREVIEW),
   };
 }
 
 export default {
   name: ['test'],
-  description: 'Extrae las URL directas de vídeos de Instagram.',
+  description: 'Prueba el scraper de Instagram mediante SaveFrom.',
   category: 'owner',
   ownerOnly: true,
   groupOnly: false,
@@ -223,61 +221,68 @@ export default {
       });
     }
 
-    const { shortcode, tipoRuta } = datos;
-
     try {
       if (typeof react === 'function') {
         await react('⏳');
       }
 
-      const resultado = await obtenerHTML(
-        shortcode,
-        tipoRuta
-      );
+      const resultado = await consultarSaveFrom(datos.url);
 
       if (resultado.status !== 200) {
         return responder({
           ok: false,
           platform: 'instagram',
-          shortcode,
+          provider: 'savefrom',
+          shortcode: datos.shortcode,
           status: resultado.status,
-          error: `Instagram respondió HTTP ${resultado.status}.`,
-        });
-      }
-
-      const extraido = extraerMedios(resultado.html);
-
-      if (!extraido.medios.length) {
-        return responder({
-          ok: false,
-          platform: 'instagram',
-          shortcode,
-          status: resultado.status,
-          error: 'No se encontraron video_versions ni video_url en el HTML.',
+          error: 'SaveFrom no aceptó la petición.',
           diagnostic: {
-            htmlLength: resultado.html.length,
-            hasVideoVersions: /"video_versions"/.test(resultado.html),
-            hasVideoUrl: /"video_url"/.test(resultado.html),
-            hasDashManifest: /"video_dash_manifest"/.test(resultado.html),
+            contentType: resultado.contentType,
+            responseLength: resultado.length,
+            preview: resultado.preview,
           },
         });
       }
 
+      if (resultado.enlaces.length) {
+        return responder({
+          ok: true,
+          platform: 'instagram',
+          provider: 'savefrom',
+          shortcode: datos.shortcode,
+          total: resultado.enlaces.length,
+          media: resultado.enlaces.map(url => ({
+            type: 'video',
+            format: 'mp4',
+            url,
+          })),
+        });
+      }
+
       return responder({
-        ok: true,
+        ok: false,
         platform: 'instagram',
-        shortcode,
-        type: extraido.tipo,
-        total: extraido.medios.length,
-        media: extraido.medios,
-        dash_manifest: extraido.dash_manifest,
+        provider: 'savefrom',
+        shortcode: datos.shortcode,
+        status: resultado.status,
+        error: resultado.isJavaScript
+          ? 'SaveFrom respondió con JavaScript. Todavía falta procesar su respuesta para obtener el enlace MP4.'
+          : 'No se encontró ningún enlace MP4 en la respuesta.',
+        diagnostic: {
+          contentType: resultado.contentType,
+          responseLength: resultado.length,
+          isJavaScript: resultado.isJavaScript,
+          linksFound: resultado.enlaces.length,
+          preview: resultado.preview,
+        },
       });
 
     } catch (error) {
       return responder({
         ok: false,
         platform: 'instagram',
-        shortcode,
+        provider: 'savefrom',
+        shortcode: datos.shortcode,
         error: String(error?.message || error),
       });
     } finally {
