@@ -20,11 +20,12 @@ async function addExif(buffer, author) {
     'utf8'
   )
 
+  // Encabezado EXIF TIFF válido para stickers
   const exifAttr = Buffer.from([
     0x49, 0x49, 0x2A, 0x00,
     0x08, 0x00, 0x00, 0x00,
     0x01, 0x00, 0x41, 0x57,
-    0x04, 0x00, 0x00, 0x00,
+    0x07, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x16, 0x00,
     0x00, 0x00
   ])
@@ -36,6 +37,7 @@ async function addExif(buffer, author) {
 
   exif.writeUIntLE(jsonBuffer.length, 14, 4)
 
+  // Sustituir metadata anterior
   img.exif = exif
 
   return await img.save(null)
@@ -43,7 +45,7 @@ async function addExif(buffer, author) {
 
 export default {
   name: ['wm', 'take'],
-  description: 'Cambia completamente la metadata del sticker',
+  description: 'Cambia la metadata de un sticker',
   category: 'stickers',
   ownerOnly: false,
 
@@ -86,32 +88,31 @@ export default {
         { sock }
       )
 
-      if (!buffer || !buffer.length) {
+      if (!buffer?.length) {
         throw new Error('No se pudo descargar el sticker.')
       }
 
       const sticker = await addExif(buffer, author)
 
-      if (!sticker || !sticker.length) {
+      if (!sticker?.length) {
         throw new Error('No se pudo generar el sticker.')
       }
 
       await sock.sendMessage(
         from,
-        { sticker: sticker },
+        { sticker },
         { quoted: msg }
       )
 
       await react('✅')
 
     } catch (error) {
-      await react('❌')
+      console.error('Error en wm:', error)
 
+      await react('❌')
       await reply({
         text: `❌ ${error.message}`
       })
-
-      console.error('Error en wm:', error)
     }
   }
 }
