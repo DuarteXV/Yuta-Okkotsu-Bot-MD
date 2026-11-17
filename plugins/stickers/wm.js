@@ -1,3 +1,4 @@
+
 import crypto from 'crypto'
 import { downloadMediaMessage } from '@whiskeysockets/baileys'
 
@@ -7,37 +8,36 @@ async function addExif(buffer, author) {
 
   await img.load(buffer)
 
-  let metadata = {}
-
-  try {
-    if (img.exif) {
-      const exif = Buffer.from(img.exif)
-      const json = exif.subarray(22).toString()
-      metadata = JSON.parse(json)
-    }
-  } catch {}
-
+  // Metadata nueva desde cero
   const json = {
-    'sticker-pack-id': metadata['sticker-pack-id'] || crypto.randomBytes(32).toString('hex'),
-    'sticker-pack-name': metadata['sticker-pack-name'] || '',
+    'sticker-pack-id': crypto.randomBytes(32).toString('hex'),
+    'sticker-pack-name': '',
     'sticker-pack-publisher': author,
-    emojis: metadata.emojis || ['⚔️']
+    emojis: ['⚔️']
   }
 
   const exifAttr = Buffer.from([
     0x49, 0x49, 0x2A, 0x00,
     0x08, 0x00, 0x00, 0x00,
     0x01, 0x00, 0x41, 0x57,
-    0x07, 0x00, 0x00, 0x00,
+    0x04, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x16, 0x00,
     0x00, 0x00
   ])
 
-  const jsonBuffer = Buffer.from(JSON.stringify(json), 'utf8')
-  const exif = Buffer.concat([exifAttr, jsonBuffer])
+  const jsonBuffer = Buffer.from(
+    JSON.stringify(json),
+    'utf8'
+  )
+
+  const exif = Buffer.concat([
+    exifAttr,
+    jsonBuffer
+  ])
 
   exif.writeUIntLE(jsonBuffer.length, 14, 4)
 
+  // Reemplazar EXIF anterior
   img.exif = exif
 
   return await img.save(null)
@@ -45,7 +45,7 @@ async function addExif(buffer, author) {
 
 export default {
   name: ['wm', 'take'],
-  description: 'Cambia el autor de un sticker',
+  description: 'Cambia completamente la metadata del sticker',
   category: 'stickers',
   ownerOnly: false,
 
@@ -56,8 +56,7 @@ export default {
 
       if (!quoted?.stickerMessage) {
         return await reply({
-          text: `❌ Responde a un sticker.\n\n` +
-                `✦ ${usedPrefix}wm yo`
+          text: `❌ Responde a un sticker.\n\n✦ ${usedPrefix}wm yo`
         })
       }
 
@@ -89,12 +88,21 @@ export default {
 
       const sticker = await addExif(buffer, author)
 
-      await sock.sendMessage(from, { sticker }, { quoted: msg })
+      await sock.sendMessage(
+        from,
+        { sticker },
+        { quoted: msg }
+      )
 
       await react('✅')
+
     } catch (error) {
       await react('❌')
-      await reply({ text: `❌ ${error.message}` })
+
+      await reply({
+        text: `❌ ${error.message}`
+      })
+
       console.error('Error en wm:', error)
     }
   }
