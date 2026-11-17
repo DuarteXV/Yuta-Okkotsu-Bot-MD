@@ -1,6 +1,6 @@
 import { getAllSockets } from "../../core/subbotManager.js"
 
-const REPORT_GROUP_ID = "120363427598752084@g.us"
+const REPORT_GROUP_ID = "120363413759638863@g.us"
 
 function cleanJid(jid = "") {
   if (!jid) return "";
