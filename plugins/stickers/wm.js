@@ -8,13 +8,17 @@ async function addExif(buffer, author) {
 
   await img.load(buffer)
 
-  // Metadata nueva desde cero
   const json = {
     'sticker-pack-id': crypto.randomBytes(32).toString('hex'),
     'sticker-pack-name': '',
     'sticker-pack-publisher': author,
     emojis: ['⚔️']
   }
+
+  const jsonBuffer = Buffer.from(
+    JSON.stringify(json),
+    'utf8'
+  )
 
   const exifAttr = Buffer.from([
     0x49, 0x49, 0x2A, 0x00,
@@ -25,11 +29,6 @@ async function addExif(buffer, author) {
     0x00, 0x00
   ])
 
-  const jsonBuffer = Buffer.from(
-    JSON.stringify(json),
-    'utf8'
-  )
-
   const exif = Buffer.concat([
     exifAttr,
     jsonBuffer
@@ -37,7 +36,6 @@ async function addExif(buffer, author) {
 
   exif.writeUIntLE(jsonBuffer.length, 14, 4)
 
-  // Reemplazar EXIF anterior
   img.exif = exif
 
   return await img.save(null)
@@ -51,7 +49,9 @@ export default {
 
   async run({ sock, from, msg, args, usedPrefix, react, reply }) {
     try {
-      const contextInfo = msg.message?.extendedTextMessage?.contextInfo
+      const contextInfo =
+        msg.message?.extendedTextMessage?.contextInfo
+
       const quoted = contextInfo?.quotedMessage
 
       if (!quoted?.stickerMessage) {
@@ -86,11 +86,19 @@ export default {
         { sock }
       )
 
+      if (!buffer || !buffer.length) {
+        throw new Error('No se pudo descargar el sticker.')
+      }
+
       const sticker = await addExif(buffer, author)
+
+      if (!sticker || !sticker.length) {
+        throw new Error('No se pudo generar el sticker.')
+      }
 
       await sock.sendMessage(
         from,
-        { sticker },
+        { sticker: sticker },
         { quoted: msg }
       )
 
