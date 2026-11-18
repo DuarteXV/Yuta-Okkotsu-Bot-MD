@@ -8,8 +8,8 @@ import path from 'node:path'
 
 const execFileAsync = promisify(execFile)
 
-const MAX_SIZE = 25 * 1024 * 1024
-const FFMPEG_TIMEOUT = 120000
+const MAX_SIZE = 50 * 1024 * 1024
+const FFMPEG_TIMEOUT = 180000
 
 function getChannelCode(url) {
   try {
@@ -19,37 +19,21 @@ function getChannelCode(url) {
       return null
     }
 
-    const match = parsed.pathname.match(/^\/channel\/([a-zA-Z0-9]+)\/?$/)
-
-    return match?.[1] || null
+    return parsed.pathname.match(/^\/channel\/([a-zA-Z0-9]+)\/?$/)?.[1] || null
   } catch {
     return null
   }
 }
 
-async function resolveChannel(sock, input, from) {
-  if (from?.endsWith('@newsletter')) {
-    return from
-  }
-
-  if (!input) {
-    throw new Error('Proporciona el enlace del canal.')
-  }
-
-  if (input.endsWith('@newsletter')) {
-    return input
-  }
-
-  const code = getChannelCode(input)
+async function resolveChannel(sock, url) {
+  const code = getChannelCode(url)
 
   if (!code) {
     throw new Error('El enlace del canal no es válido.')
   }
 
   if (typeof sock.newsletterMetadata !== 'function') {
-    throw new Error(
-      'Tu versión de Baileys no soporta newsletterMetadata.'
-    )
+    throw new Error('Tu versión de Baileys no soporta newsletterMetadata.')
   }
 
   const metadata = await sock.newsletterMetadata('invite', code)
@@ -64,9 +48,7 @@ async function resolveChannel(sock, input, from) {
 function extractAudioMessage(message) {
   if (!message) return null
 
-  if (message.audioMessage) {
-    return message.audioMessage
-  }
+  if (message.audioMessage) return message.audioMessage
 
   const wrappers = [
     'ephemeralMessage',
@@ -78,81 +60,13 @@ function extractAudioMessage(message) {
 
   for (const wrapper of wrappers) {
     const nested = message[wrapper]?.message
+    if (!nested) continue
 
-    if (nested) {
-      const audio = extractAudioMessage(nested)
-
-      if (audio) return audio
-    }
+    const audio = extractAudioMessage(nested)
+    if (audio) return audio
   }
 
   return null
-}
-
-async function downloadAudio(url) {
-  let parsed
-
-  try {
-    parsed = new URL(url)
-  } catch {
-    throw new Error('La URL del audio no es válida.')
-  }
-
-  if (!['http:', 'https:'].includes(parsed.protocol)) {
-    throw new Error('Solo se permiten enlaces HTTP o HTTPS.')
-  }
-
-  const response = await fetch(parsed, {
-    signal: AbortSignal.timeout(30000),
-    headers: {
-      'User-Agent': 'Mozilla/5.0'
-    }
-  })
-
-  if (!response.ok) {
-    throw new Error(`Error descargando audio: HTTP ${response.status}`)
-  }
-
-  const length = Number(response.headers.get('content-length') || 0)
-
-  if (length > MAX_SIZE) {
-    throw new Error('El audio supera el límite de 25 MB.')
-  }
-
-  if (!response.body) {
-    throw new Error('No se recibió contenido del servidor.')
-  }
-
-  const reader = response.body.getReader()
-  const chunks = []
-  let total = 0
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read()
-
-      if (done) break
-
-      total += value.length
-
-      if (total > MAX_SIZE) {
-        await reader.cancel()
-        throw new Error('El audio supera el límite de 25 MB.')
-      }
-
-      chunks.push(Buffer.from(value))
-    }
-  } finally {
-    reader.releaseLock()
-  }
-
-  const buffer = Buffer.concat(chunks)
-
-  if (!buffer.length) {
-    throw new Error('El archivo de audio está vacío.')
-  }
-
-  return buffer
 }
 
 async function convertToVoiceNote(buffer) {
@@ -174,7 +88,7 @@ async function convertToVoiceNote(buffer) {
       '-ac', '1',
       '-ar', '48000',
       '-c:a', 'libopus',
-      '-b:a', '64k',
+      '-b:a', '48k',
       '-application', 'voip',
       '-f', 'ogg',
       output
@@ -183,27 +97,23 @@ async function convertToVoiceNote(buffer) {
       maxBuffer: 10 * 1024 * 1024
     })
 
-    const converted = await readFile(output)
+    const result = await readFile(output)
 
-    if (!converted.length) {
-      throw new Error('FFmpeg generó un audio vacío.')
+    if (!result.length) {
+      throw new Error('La conversión produjo un archivo vacío.')
     }
 
-    return converted
+    return result
   } catch (error) {
     if (error.code === 'ENOENT') {
-      throw new Error(
-        'FFmpeg no está instalado o no está disponible en PATH.'
-      )
+      throw new Error('FFmpeg no está instalado en el servidor.')
     }
 
     if (error.killed) {
-      throw new Error('La conversión del audio tardó demasiado.')
+      throw new Error('La conversión tardó demasiado.')
     }
 
-    throw new Error(
-      `No se pudo convertir el audio: ${error.message}`
-    )
+    throw new Error(`Error convirtiendo audio: ${error.message}`)
   } finally {
     await rm(directory, {
       recursive: true,
@@ -214,9 +124,9 @@ async function convertToVoiceNote(buffer) {
 
 export default {
   name: ['audiocanal'],
-  description: 'Publica notas de voz en canales de WhatsApp',
-  category: 'owner',
-  ownerOnly: true,
+  description: 'Publica una nota de voz en un canal de WhatsApp',
+  category: 'misc',
+  ownerOnly: false,
 
   async run({ sock, from, msg, args, react, reply }) {
     try {
@@ -230,69 +140,55 @@ export default {
         ? args
         : String(args || '').split(/\s+/)
 
-      const urls = parameters.filter(arg =>
-        /^https?:\/\//i.test(arg)
+      const channelUrl = parameters.find(arg =>
+        getChannelCode(arg)
       )
 
-      const channelUrl = urls.find(url => getChannelCode(url))
-      const audioUrl = urls.find(url => url !== channelUrl)
-
-      if (!audioMessage && !audioUrl) {
+      if (!audioMessage) {
         return reply({
-          text:
-            'Responde a una nota de voz o proporciona un enlace de audio.\n\n' +
-            'Uso:\n' +
-            '• Responde a un audio y escribe .audiocanal LINK_DEL_CANAL\n' +
-            '• .audiocanal URL_DEL_AUDIO LINK_DEL_CANAL'
+          text: 'Debes responder directamente a una nota de voz.'
         })
       }
 
-      if (!channelUrl && !from?.endsWith('@newsletter')) {
+      if (!channelUrl) {
         return reply({
-          text: 'Debes proporcionar el enlace del canal de WhatsApp.'
+          text: 'Debes proporcionar el enlace del canal.\n\nEjemplo: .audiocanal https://whatsapp.com/channel/XXXXXXXX'
         })
+      }
+
+      if (!contextInfo?.stanzaId) {
+        throw new Error('No se pudo identificar el mensaje respondido.')
       }
 
       await react('🕒')
 
-      const channelJid = await resolveChannel(
-        sock,
-        channelUrl,
-        from
-      )
+      const channelJid = await resolveChannel(sock, channelUrl)
 
-      let originalBuffer
-
-      if (audioMessage) {
-        if (!contextInfo?.stanzaId) {
-          throw new Error('No se pudo identificar el mensaje respondido.')
-        }
-
-        const quotedMsg = {
-          key: {
-            remoteJid: from,
-            id: contextInfo.stanzaId,
-            participant: contextInfo.participant
-          },
-          message: quoted
-        }
-
-        originalBuffer = await downloadMediaMessage(
-          quotedMsg,
-          'buffer',
-          {},
-          {}
-        )
-      } else {
-        originalBuffer = await downloadAudio(audioUrl)
+      const quotedMsg = {
+        key: {
+          remoteJid: from,
+          id: contextInfo.stanzaId,
+          participant: contextInfo.participant,
+          fromMe: false
+        },
+        message: quoted
       }
 
+      const originalBuffer = await downloadMediaMessage(
+        quotedMsg,
+        'buffer',
+        {},
+        {
+          reuploadRequest: sock.updateMediaMessage
+        }
+      )
+
       if (!originalBuffer?.length) {
-        throw new Error('No se pudo obtener el audio.')
+        throw new Error('No se pudo descargar la nota de voz.')
       }
 
       if (originalBuffer.length > MAX_SIZE) {
-        throw new Error('El audio supera el límite de 25 MB.')
+        throw new Error('El audio supera el límite de 50 MB.')
       }
 
       const voiceNote = await convertToVoiceNote(originalBuffer)
@@ -306,7 +202,7 @@ export default {
       await react('✅')
 
       return reply({
-        text: '✓ Nota de voz publicada correctamente en el canal.'
+        text: '✓ Nota de voz publicada correctamente.'
       })
 
     } catch (error) {
@@ -315,7 +211,7 @@ export default {
       await react('❌')
 
       return reply({
-        text: `✗ ${error.message || 'Ocurrió un error al publicar la nota de voz.'}`
+        text: `✗ ${error.message || 'No se pudo publicar la nota de voz.'}`
       })
     }
   }
