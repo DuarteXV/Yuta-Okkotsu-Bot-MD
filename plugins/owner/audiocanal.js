@@ -25,29 +25,8 @@ function getChannelCode(url) {
   }
 }
 
-async function resolveChannel(sock, url) {
-  const code = getChannelCode(url)
-
-  if (!code) {
-    throw new Error('El enlace del canal no es válido.')
-  }
-
-  if (typeof sock.newsletterMetadata !== 'function') {
-    throw new Error('Tu versión de Baileys no soporta newsletterMetadata.')
-  }
-
-  const metadata = await sock.newsletterMetadata('invite', code)
-
-  if (!metadata?.id) {
-    throw new Error('No se pudo obtener el ID del canal.')
-  }
-
-  return metadata.id
-}
-
 function extractAudioMessage(message) {
   if (!message) return null
-
   if (message.audioMessage) return message.audioMessage
 
   const wrappers = [
@@ -97,23 +76,15 @@ async function convertToVoiceNote(buffer) {
       maxBuffer: 10 * 1024 * 1024
     })
 
-    const result = await readFile(output)
-
-    if (!result.length) {
-      throw new Error('La conversión produjo un archivo vacío.')
-    }
-
-    return result
+    return await readFile(output)
   } catch (error) {
     if (error.code === 'ENOENT') {
-      throw new Error('FFmpeg no está instalado en el servidor.')
+      throw new Error('FFmpeg no está instalado.')
     }
 
-    if (error.killed) {
-      throw new Error('La conversión tardó demasiado.')
-    }
-
-    throw new Error(`Error convirtiendo audio: ${error.message}`)
+    throw new Error(
+      `FFmpeg: ${error.message}\n${error.stderr || ''}`.slice(0, 2500)
+    )
   } finally {
     await rm(directory, {
       recursive: true,
@@ -124,45 +95,81 @@ async function convertToVoiceNote(buffer) {
 
 export default {
   name: ['audiocanal'],
-  description: 'Publica una nota de voz en un canal de WhatsApp',
+  description: 'Publica notas de voz en canales con depuración',
   category: 'misc',
   ownerOnly: false,
 
   async run({ sock, from, msg, args, react, reply }) {
+    let stage = 'Inicializando'
+    const logs = []
+
+    const debug = async (message, data = '') => {
+      const line = `• ${message}${data ? `\n${typeof data === 'string' ? data : JSON.stringify(data)}` : ''}`
+
+      logs.push(line)
+      console.log('[AUDIOCANAL DEBUG]', line)
+
+      await sock.sendMessage(from, {
+        text: `🔎 *AUDIOCANAL DEBUG*\n\n${logs.join('\n\n')}`
+      })
+    }
+
     try {
+      stage = 'Leyendo mensaje respondido'
+      await debug('1. Leyendo mensaje respondido')
+
       const contextInfo =
         msg.message?.extendedTextMessage?.contextInfo
 
       const quoted = contextInfo?.quotedMessage
       const audioMessage = extractAudioMessage(quoted)
 
+      await debug('2. Detectando audio', {
+        encontrado: !!audioMessage,
+        mimetype: audioMessage?.mimetype,
+        segundos: audioMessage?.seconds,
+        bytes: audioMessage?.fileLength?.toString()
+      })
+
+      if (!audioMessage) {
+        throw new Error('No se encontró una nota de voz en el mensaje respondido.')
+      }
+
       const parameters = Array.isArray(args)
         ? args
         : String(args || '').split(/\s+/)
 
-      const channelUrl = parameters.find(arg =>
-        getChannelCode(arg)
-      )
-
-      if (!audioMessage) {
-        return reply({
-          text: 'Debes responder directamente a una nota de voz.'
-        })
-      }
+      const channelUrl = parameters.find(arg => getChannelCode(arg))
 
       if (!channelUrl) {
-        return reply({
-          text: 'Debes proporcionar el enlace del canal.\n\nEjemplo: .audiocanal https://whatsapp.com/channel/XXXXXXXX'
-        })
+        throw new Error('No se encontró un enlace válido del canal.')
       }
+
+      stage = 'Resolviendo canal'
+      await debug('3. Resolviendo canal', channelUrl)
+
+      if (typeof sock.newsletterMetadata !== 'function') {
+        throw new Error('Tu versión de Baileys no tiene newsletterMetadata.')
+      }
+
+      const code = getChannelCode(channelUrl)
+      const metadata = await sock.newsletterMetadata('invite', code)
+
+      await debug('4. Canal identificado', {
+        id: metadata?.id,
+        name: metadata?.name
+      })
+
+      if (!metadata?.id) {
+        throw new Error('No se pudo obtener el ID del canal.')
+      }
+
+      stage = 'Descargando audio'
+      await debug('5. Descargando audio')
 
       if (!contextInfo?.stanzaId) {
-        throw new Error('No se pudo identificar el mensaje respondido.')
+        throw new Error('No se encontró el ID del mensaje respondido.')
       }
-
-      await react('🕒')
-
-      const channelJid = await resolveChannel(sock, channelUrl)
 
       const quotedMsg = {
         key: {
@@ -183,35 +190,71 @@ export default {
         }
       )
 
+      await debug('6. Descarga completada', {
+        bytes: originalBuffer?.length,
+        megabytes: originalBuffer
+          ? (originalBuffer.length / 1024 / 1024).toFixed(2)
+          : 0
+      })
+
       if (!originalBuffer?.length) {
-        throw new Error('No se pudo descargar la nota de voz.')
+        throw new Error('El audio descargado está vacío.')
       }
 
       if (originalBuffer.length > MAX_SIZE) {
-        throw new Error('El audio supera el límite de 50 MB.')
+        throw new Error('El audio supera los 50 MB.')
       }
+
+      stage = 'Convirtiendo audio'
+      await debug('7. Convirtiendo a OGG/Opus')
 
       const voiceNote = await convertToVoiceNote(originalBuffer)
 
-      await sock.sendMessage(channelJid, {
+      await debug('8. Conversión completada', {
+        bytes: voiceNote.length,
+        megabytes: (voiceNote.length / 1024 / 1024).toFixed(2),
+        mimetype: 'audio/ogg; codecs=opus'
+      })
+
+      stage = 'Enviando al canal'
+      await debug('9. Enviando nota de voz al canal', {
+        channel: metadata.id,
+        ptt: true
+      })
+
+      const sent = await sock.sendMessage(metadata.id, {
         audio: voiceNote,
         mimetype: 'audio/ogg; codecs=opus',
         ptt: true
       })
 
+      await debug('10. Baileys devolvió respuesta de envío', {
+        messageId: sent?.key?.id,
+        remoteJid: sent?.key?.remoteJid,
+        fromMe: sent?.key?.fromMe
+      })
+
       await react('✅')
 
       return reply({
-        text: '✓ Nota de voz publicada correctamente.'
+        text: '✓ Proceso terminado. Revisa el debug para ver el resultado.'
       })
 
     } catch (error) {
       console.error('[AUDIOCANAL]', error)
 
+      await debug('❌ ERROR', {
+        etapa: stage,
+        nombre: error.name,
+        mensaje: error.message,
+        codigo: error.code,
+        stack: error.stack?.split('\n').slice(0, 5).join('\n')
+      }).catch(() => {})
+
       await react('❌')
 
       return reply({
-        text: `✗ ${error.message || 'No se pudo publicar la nota de voz.'}`
+        text: `✗ Falló en: ${stage}\n\n${error.message}`
       })
     }
   }
